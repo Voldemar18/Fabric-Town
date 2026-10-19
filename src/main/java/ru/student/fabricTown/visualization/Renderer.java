@@ -1,14 +1,9 @@
 package ru.student.fabricTown.visualization;
 
-import ru.student.fabricTown.agents.Car;
 import ru.student.fabricTown.agents.Person;
 import ru.student.fabricTown.agents.Product;
-import ru.student.fabricTown.buildings.Building;
-import ru.student.fabricTown.buildings.Factory;
-import ru.student.fabricTown.buildings.House;
-import ru.student.fabricTown.buildings.Road;
-import ru.student.fabricTown.buildings.RoadShape;
-import ru.student.fabricTown.buildings.Shop;
+import ru.student.fabricTown.agents.UniversalCar;
+import ru.student.fabricTown.buildings.*;
 import ru.student.fabricTown.core.Game;
 import ru.student.fabricTown.logic.Blueprint;
 import ru.student.fabricTown.logic.RoadRegistry;
@@ -320,7 +315,7 @@ public final class Renderer {
 
     // ==================== МАШИНА ====================
 
-    public static void drawCar(Graphics2D g, Car c, Camera cam) {
+    public static void drawCar(Graphics2D g, UniversalCar c, Camera cam) {
         int x = cam.worldToScreenX(c.getX());
         int y = cam.worldToScreenY(c.getY());
         int size = Math.max(4, (int) (cam.zoom * 0.5));
@@ -391,6 +386,7 @@ public final class Renderer {
             String label = switch (bp.kind) {
                 case ROAD -> "Дорога";
                 case FACTORY -> "Фабрика";
+                case PROCESSOR -> "Переработчик";
                 case SHOP -> "Магазин";
                 case HOUSE -> "Дом";
                 case LAND -> "Земля";
@@ -581,6 +577,58 @@ public final class Renderer {
             int lw = fm.stringWidth(line);
             g.drawString(line, right - lw, y);
             y += lineH;
+        }
+    }
+
+
+
+
+    private static final Color PROCESSOR_FILL = new Color(150, 80, 150);
+    private static final Color PROCESSOR_EDGE = new Color(230, 180, 230);
+
+    public static void drawProcessor(Graphics2D g, Processor p, Camera cam) {
+        Point o = p.getOrigin();
+        int x = cam.worldToScreenX(o.x);
+        int y = cam.worldToScreenY(o.y);
+        int w = (int) (p.getSize().w * cam.zoom);
+        int h = (int) (p.getSize().h * cam.zoom);
+
+        g.setColor(PROCESSOR_FILL);
+        g.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 8, 8);
+        g.setColor(PROCESSOR_EDGE);
+        g.setStroke(new BasicStroke(2f));
+        g.drawRoundRect(x + 2, y + 2, w - 4, h - 4, 8, 8);
+        g.setStroke(new BasicStroke(1f));
+
+        if (cam.zoom < 14) return;
+
+        g.setColor(Color.WHITE);
+        g.setFont(FONT_LABEL);
+        g.drawString(p.getOutputProduct().title, x + 6, y + 16);
+
+        // Полоска прогресса крафта / склада готового
+        int barW = w - 12, barH = 6;
+        int barX = x + 6, barY = y + h - 10;
+        double ratio = p.getOutputCount() / (double) p.getOutputCapacity();
+        g.setColor(new Color(0, 0, 0, 120));
+        g.fillRect(barX, barY, barW, barH);
+        g.setColor(new Color(220, 160, 220));
+        g.fillRect(barX, barY, (int) (barW * ratio), barH);
+        g.setColor(new Color(220, 220, 220));
+        g.drawRect(barX, barY, barW, barH);
+
+        g.setFont(FONT_TINY);
+        g.setColor(Color.WHITE);
+        g.drawString(p.getOutputCount() + "/" + p.getOutputCapacity(), barX, barY - 2);
+
+        // Ингредиенты (если хватает места)
+        if (cam.zoom >= 24) {
+            int yy = y + 30;
+            for (var e : p.getInputStorage().entrySet()) {
+                if (e.getValue() <= 0) continue;
+                g.drawString(e.getKey().title + ": " + e.getValue(), x + 6, yy);
+                yy += 11;
+            }
         }
     }
 }

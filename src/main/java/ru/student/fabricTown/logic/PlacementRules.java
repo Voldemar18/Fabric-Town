@@ -44,7 +44,13 @@ public class PlacementRules {
             if (tooClose(candidate, map, Factory.class, MIN_FACTORY_TO_HOUSE))
                 return "Слишком близко к фабрике";
         }
-
+        //6 Переработчик не рядом
+        if (bp.kind == Blueprint.Kind.PROCESSOR) {
+            if (tooClose(candidate, map, House.class, MIN_FACTORY_TO_HOUSE))
+                return "Слишком близко к дому";
+            if (tooClose(candidate, map, Shop.class, MIN_FACTORY_TO_SHOP))
+                return "Слишком близко к магазину";
+        }
         return null;
     }
 

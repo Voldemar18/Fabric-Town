@@ -6,7 +6,7 @@ import ru.student.fabricTown.buildings.RoadShape;
 import ru.student.fabricTown.map.Direction;
 
 public class Blueprint {
-    public enum Kind { ROAD, FACTORY, SHOP, HOUSE, LAND }
+    public enum Kind { ROAD, FACTORY,PROCESSOR, SHOP, HOUSE, LAND }
 
     public final Kind kind;
     public final BuildingSize size;

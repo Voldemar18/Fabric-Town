@@ -1,5 +1,6 @@
 package ru.student.fabricTown.buildings;
 
+import ru.student.fabricTown.agents.CargoSource;
 import ru.student.fabricTown.agents.Product;
 import ru.student.fabricTown.map.Point;
 
@@ -8,7 +9,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
-public class Factory extends Building {
+public class Factory extends Building implements CargoSource {
     private final Product product;
     private final int maxStorage;
     private final Deque<Product> storage = new ArrayDeque<>();

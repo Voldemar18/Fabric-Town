@@ -79,6 +79,7 @@ public class Catalog {
      * Все фабрики одного типа товара.
      */
     public static List<Blueprint> factoriesOfType(Product p) {
+        if (!p.isRawMaterial()) return List.of();
         List<Blueprint> list = new ArrayList<>();
         list.add(new Blueprint(Blueprint.Kind.FACTORY, BuildingSize.S1x1, p, null,
                 "Завод 1×1 (" + p.title + ")", 200));
@@ -135,15 +136,26 @@ public class Catalog {
                 "Расширить карту (+1 участок)", LAND_COST));
         return list;
     }
-
+    public static List<Blueprint> processors() {
+        List<Blueprint> list = new ArrayList<>();
+        list.add(new Blueprint(Blueprint.Kind.PROCESSOR, BuildingSize.S1x1,
+                Product.CHOCOLATE, null, "Шоколадный цех 1×1", 400));
+        list.add(new Blueprint(Blueprint.Kind.PROCESSOR, BuildingSize.S2x2,
+                Product.CHOCOLATE, null, "Шоколадный цех 2×2", 1600));
+        list.add(new Blueprint(Blueprint.Kind.PROCESSOR, BuildingSize.S3x3,
+                Product.CHOCOLATE, null, "Шоколадный цех 3×3", 3600));
+        return list;
+    }
     // ==================== НОВЫЕ МЕТОДЫ С ГРУППАМИ ====================
 
     /**
      * Категории с подгруппами для аккордеона в BuildPanel.
      */
     public static List<CatalogGroup> factoriesGrouped() {
+
         List<CatalogGroup> groups = new ArrayList<>();
         for (Product p : Product.values()) {
+            if (!p.isRawMaterial()) continue;
             groups.add(new CatalogGroup(p.title, factoriesOfType(p)));
         }
         return groups;

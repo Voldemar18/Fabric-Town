@@ -56,6 +56,7 @@ public class BuildPanel extends JPanel {
         addGroupedCategory("🏭 Фабрики", Catalog.factoriesGrouped());
 
         // ==================== ПРОСТЫЕ КАТЕГОРИИ ====================
+        addSimpleCategory("🍫 Переработчики", Catalog.processors());
         addSimpleCategory("🏪 Магазины", Catalog.shops());
         addSimpleCategory("🏠 Дома", Catalog.houses());
         addSimpleCategory("🗺 Расширение", Catalog.services());

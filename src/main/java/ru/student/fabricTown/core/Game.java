@@ -1,8 +1,10 @@
 package ru.student.fabricTown.core;
 
-import ru.student.fabricTown.agents.Car;
+import ru.student.fabricTown.agents.CargoSink;
+import ru.student.fabricTown.agents.CargoSource;
 import ru.student.fabricTown.agents.Person;
 import ru.student.fabricTown.agents.Product;
+import ru.student.fabricTown.agents.UniversalCar;
 import ru.student.fabricTown.buildings.*;
 import ru.student.fabricTown.logic.Blueprint;
 import ru.student.fabricTown.logic.BuildingFactory;
@@ -12,6 +14,7 @@ import ru.student.fabricTown.logic.GameEvents;
 import ru.student.fabricTown.logic.GraphBuilder;
 import ru.student.fabricTown.logic.PathFinder;
 import ru.student.fabricTown.logic.PlacementRules;
+import ru.student.fabricTown.logic.Recipes;
 import ru.student.fabricTown.logic.RoadRegistry;
 import ru.student.fabricTown.map.Direction;
 import ru.student.fabricTown.map.GameMap;
@@ -35,22 +38,29 @@ import java.util.Set;
  *
  * Такая сетка ГАРАНТИРУЕТ, что:
  *   - для любой пары дорожных клеток есть путь по графу;
- *   - для любой пары фабрика↔магазин есть и прямой, и обратный путь;
+ *   - для любой пары поставщик↔получатель есть и прямой, и обратный путь;
  *   - машина всегда может развернуться через ближайший перекрёсток.
+ *
+ * Все машины — это {@link UniversalCar}. Он работает с двумя интерфейсами:
+ *   - {@link CargoSource} — откуда брать товар (Factory, Processor);
+ *   - {@link CargoSink}   — куда выгружать (Shop, Processor).
+ *
+ * Три логистические линии используют один и тот же класс:
+ *   - Фабрика → Магазин         (src=Factory,   dst=Shop);
+ *   - Фабрика → Переработчик    (src=Factory,   dst=Processor);
+ *   - Переработчик → Магазин    (src=Processor, dst=Shop).
  *
  * Динамическое обновление маршрутов:
  *   При ЛЮБОМ изменении дорожной сети (постройка, снос, поворот)
- *   вызывается {@link #rebuildAllRoutes()}, который:
- *     - для каждой пары фабрика↔магазин заново ищет пути «туда» и «обратно»;
- *     - если оба пути есть — обновляет маршрут машины (даже в пути);
- *     - если хотя бы одного нет — переводит машину в NO_ROUTE,
- *       чтобы она автоматически ожила, когда игрок достроит дорогу.
+ *   вызывается {@link #rebuildAllRoutes()}, который заново ищет пути
+ *   «туда» и «обратно» для каждой привязки. Если оба пути есть —
+ *   машина обновляет маршрут (даже в пути). Если хотя бы одного нет —
+ *   машина уходит в NO_ROUTE и ждёт, пока игрок достроит дорогу.
  *
  * Отзыв машин:
- *   {@link #recallAllCars()} — все машины мгновенно возвращаются к фабрикам
- *   и перестают выезжать. {@link #resumeAllCars()} — возобновляет доставку.
- *   Маршруты при этом продолжают пересчитываться: после снятия паузы машины
- *   поедут по актуальным путям.
+ *   {@link #recallAllCars()} — все машины мгновенно возвращаются
+ *   к поставщикам и перестают выезжать.
+ *   {@link #resumeAllCars()} — возобновляет доставку.
  */
 public class Game {
 
@@ -68,7 +78,8 @@ public class Game {
     private final List<Factory> factories = new ArrayList<>();
     private final List<Shop> shops = new ArrayList<>();
     private final List<House> houses = new ArrayList<>();
-    private final List<Car> cars = new ArrayList<>();
+    private final List<Processor> processors = new ArrayList<>();
+    private final List<UniversalCar> cars = new ArrayList<>();
     private final List<Person> people = new ArrayList<>();
 
     private final Random rng = new Random();
@@ -82,9 +93,7 @@ public class Game {
     /**
      * Приостановлена ли доставка машин.
      *   false — машины работают как обычно;
-     *   true  — машины отозваны на фабрики и не выезжают.
-     *
-     * Управляется методами {@link #recallAllCars()} / {@link #resumeAllCars()}.
+     *   true  — машины отозваны и не выезжают.
      */
     private boolean deliveryPaused = false;
 
@@ -106,29 +115,19 @@ public class Game {
         initRoadGrid();
         graphBuilder.rebuild();
         initBuildings();
-        autoBindAllFactories();
+//        autoBindAllFactories();
+//        autoBindAllProcessors();
 
         notifications.success("Город основан: "
                 + factories.size() + " фабрик, "
                 + shops.size() + " магазинов, "
+                + processors.size() + " переработчиков, "
                 + houses.size() + " домов");
     }
 
     // ================== 1. ДОРОЖНАЯ СЕТКА 20×20 ==================
 
-    /**
-     * Сетка из «двойных улиц»:
-     *
-     *   Горизонтальные пары (верхняя — EAST, нижняя — WEST):
-     *     (y = 0, y = 1), (y = 6, y = 7), (y = 12, y = 13), (y = 18, y = 19)
-     *
-     *   Вертикальные пары (левая — SOUTH, правая — NORTH):
-     *     (x = 0, x = 1), (x = 6, x = 7), (x = 12, x = 13), (x = 18, x = 19)
-     *
-     * На каждом пересечении пары-с-парой стоит CROSS.
-     */
     private void initRoadGrid() {
-        // ================== ГОРИЗОНТАЛЬНЫЕ ПАРЫ ==================
         int[] hEastRows = { 0,  6, 12, 18 };
         int[] hWestRows = { 1,  7, 13, 19 };
 
@@ -148,7 +147,6 @@ public class Game {
             }
         }
 
-        // ================== ВЕРТИКАЛЬНЫЕ ПАРЫ ==================
         int[] vSouthCols = { 0,  6, 12, 18 };
         int[] vNorthCols = { 1,  7, 13, 19 };
 
@@ -168,74 +166,48 @@ public class Game {
             }
         }
 
-        // ================== ПЕРЕКРЁСТКИ CROSS ==================
         for (int x : vSouthCols) {
-            for (int y : hEastRows) {
-                replaceWithRoad(new Point(x, y), RoadShape.CROSS);
-            }
+            for (int y : hEastRows) replaceWithRoad(new Point(x, y), RoadShape.CROSS);
         }
         for (int x : vNorthCols) {
-            for (int y : hEastRows) {
-                replaceWithRoad(new Point(x, y), RoadShape.CROSS);
-            }
+            for (int y : hEastRows) replaceWithRoad(new Point(x, y), RoadShape.CROSS);
         }
         for (int x : vSouthCols) {
-            for (int y : hWestRows) {
-                replaceWithRoad(new Point(x, y), RoadShape.CROSS);
-            }
+            for (int y : hWestRows) replaceWithRoad(new Point(x, y), RoadShape.CROSS);
         }
         for (int x : vNorthCols) {
-            for (int y : hWestRows) {
-                replaceWithRoad(new Point(x, y), RoadShape.CROSS);
-            }
+            for (int y : hWestRows) replaceWithRoad(new Point(x, y), RoadShape.CROSS);
         }
     }
 
-    /**
-     * Заменить дорогу в клетке на дорогу заданной формы.
-     */
     private void replaceWithRoad(Point p, RoadShape shape) {
         Building old = map.get(p);
-        if (old != null) {
-            map.remove(old);
-        }
+        if (old != null) map.remove(old);
         map.place(new Road(p, shape));
     }
 
     // ================== 2. ЗДАНИЯ ==================
 
     private void initBuildings() {
-        // ========== КВАРТАЛ 1 ==========
-        placeFactory(new Factory(new Point(2, 2),
-                BuildingSize.S1x1, Product.CHICKEN));
+        // Обычные фабрики
+        placeFactory(new Factory(new Point(2, 2), BuildingSize.S1x1, Product.CHICKEN));
+        placeFactory(new Factory(new Point(8, 2), BuildingSize.S2x2, Product.BEEF));
+        placeFactory(new Factory(new Point(14, 2), BuildingSize.S3x3, Product.FRUIT));
+        placeFactory(new Factory(new Point(2, 8), BuildingSize.S1x2, Product.VEGETABLES));
+        placeFactory(new Factory(new Point(8, 8), BuildingSize.S2x2, Product.BREAD));
+        placeFactory(new Factory(new Point(14, 8), BuildingSize.S2x2, Product.CHICKEN));
 
-        // ========== КВАРТАЛ 2 ==========
-        placeFactory(new Factory(new Point(8, 2),
-                BuildingSize.S2x2, Product.BEEF));
+        // Фабрики-ингредиенты для шоколада
+        placeFactory(new Factory(new Point(16, 4), BuildingSize.S1x1, Product.MILK));
+        placeFactory(new Factory(new Point(16, 6), BuildingSize.S1x1, Product.COCOA));
 
-        // ========== КВАРТАЛ 3 ==========
-        placeFactory(new Factory(new Point(14, 2),
-                BuildingSize.S3x3, Product.FRUIT));
+        // Переработчик шоколада
+        placeProcessor(new Processor(new Point(10, 8),
+                BuildingSize.S2x2, Recipes.CHOCOLATE));
 
-        // ========== КВАРТАЛ 4 ==========
-        placeFactory(new Factory(new Point(2, 8),
-                BuildingSize.S1x2, Product.VEGETABLES));
-
-        // ========== КВАРТАЛ 5 ==========
-        placeFactory(new Factory(new Point(8, 8),
-                BuildingSize.S2x2, Product.BREAD));
-
-        // ========== КВАРТАЛ 6 ==========
-        placeFactory(new Factory(new Point(14, 8),
-                BuildingSize.S2x2, Product.CHICKEN));
-
-        // ========== КВАРТАЛ 7 ==========
+        // Магазины
         placeShop(new Shop(new Point(2, 14), BuildingSize.S1x1));
-
-        // ========== КВАРТАЛ 8 ==========
         placeShop(new Shop(new Point(8, 14), BuildingSize.S2x2));
-
-        // ========== КВАРТАЛ 9 ==========
         placeShop(new Shop(new Point(14, 14), BuildingSize.S1x2));
 
         // Дома
@@ -277,6 +249,16 @@ public class Game {
         houses.add(h);
     }
 
+    private void placeProcessor(Processor p) {
+        if (!map.canPlace(p)) {
+            System.err.println("[Game] Не могу поставить переработчик "
+                    + p.getOrigin() + " — место занято");
+            return;
+        }
+        map.place(p);
+        processors.add(p);
+    }
+
     // ================== 3. АВТОПРИВЯЗКА ==================
 
     private void autoBindAllFactories() {
@@ -286,15 +268,56 @@ public class Game {
     }
 
     private void tryAutoBindFactory(Factory f) {
+        // Фабрика может возить свою продукцию в магазины как обычный товар.
         List<Shop> sorted = new ArrayList<>(shops);
         sorted.sort(Comparator.comparingDouble(s ->
                 Math.hypot(s.getOrigin().x - f.getOrigin().x,
                         s.getOrigin().y - f.getOrigin().y)));
 
         for (Shop s : sorted) {
-            if (dispatcher.getFactoriesForShopCount(f) >= f.getMaxShops()) break;
+            if (countBoundShops(f) >= f.getMaxShops()) break;
             if (!dispatcher.canBind(f, s)) continue;
             bindFactoryToShop(f, s);
+        }
+    }
+
+    private void autoBindAllProcessors() {
+        for (Processor p : new ArrayList<>(processors)) {
+            tryAutoBindProcessor(p);
+        }
+    }
+
+    /**
+     * Автопривязка переработчика:
+     *   1) все фабрики-ингредиенты, которые принимает рецепт,
+     *      ближайшие к переработчику — привязываем (Ф → П);
+     *   2) ближайшие магазины — привязываем как получателей
+     *      готового продукта (П → М).
+     */
+    private void tryAutoBindProcessor(Processor p) {
+        // 1) ингредиенты
+        List<Factory> sortedFactories = new ArrayList<>(factories);
+        sortedFactories.sort(Comparator.comparingDouble(f ->
+                Math.hypot(f.getOrigin().x - p.getOrigin().x,
+                        f.getOrigin().y - p.getOrigin().y)));
+
+        for (Factory f : sortedFactories) {
+            if (!p.acceptsIngredient(f.getProduct())) continue;
+            if (!dispatcher.canBindToProcessor(f, p)) continue;
+            bindFactoryToProcessor(f, p);
+        }
+
+        // 2) магазины
+        List<Shop> sortedShops = new ArrayList<>(shops);
+        sortedShops.sort(Comparator.comparingDouble(s ->
+                Math.hypot(s.getOrigin().x - p.getOrigin().x,
+                        s.getOrigin().y - p.getOrigin().y)));
+
+        int shopsBound = 0;
+        for (Shop s : sortedShops) {
+            if (shopsBound >= p.getMaxShops()) break;
+            if (dispatcher.getProcessorsForShop(s).contains(p)) continue;
+            if (bindProcessorToShop(p, s)) shopsBound++;
         }
     }
 
@@ -303,6 +326,7 @@ public class Game {
     public void tick(double dt) {
         notifications.update(dt);
 
+        // --- Фабрики ---
         for (Factory f : factories) {
             f.tick(dt);
             if (f.getStorageCount() >= f.getMaxStorage()) {
@@ -310,14 +334,22 @@ public class Game {
             }
         }
 
-        for (Car c : cars) {
-            if (c.getState() == Car.State.IDLE) {
-                // Если доставка на паузе — машины стоят и не выезжают.
-                if (deliveryPaused) continue;
+        // --- Переработчики: производство ---
+        for (Processor p : processors) {
+            p.tick(dt);
+        }
 
-                Shop s = c.getShop();
-                if (s.isFull()) {
-                    GameEvents.shopFull(notifications, s);
+        // --- Все машины (один цикл) ---
+        for (UniversalCar c : cars) {
+            if (c.getState() == UniversalCar.State.IDLE) {
+                if (deliveryPaused) {
+                    // машина уже стоит, но tick всё равно нужен
+                } else if (!c.getSink().hasFreeSpace()) {
+                    // Получатель полон: магазину — уведомление,
+                    // переработчику — просто ждём без спама.
+                    if (c.getSink() instanceof Shop s) {
+                        GameEvents.shopFull(notifications, s);
+                    }
                 } else {
                     c.tryStartDelivery();
                 }
@@ -325,14 +357,14 @@ public class Game {
             c.tick(dt);
         }
 
+        // --- Люди ---
         for (House h : houses) {
             if (h.tickAndCheckExit(dt)) {
                 Product need = randomProduct();
                 Shop target = findNearestShopWithProduct(h, need);
                 if (target != null) {
                     Person p = new Person(h, target, need);
-                    p.setShopFinder((n, visited) ->
-                            findAlternativeShop(h, n, visited));
+                    p.setShopFinder((n, visited) -> findAlternativeShop(h, n, visited));
                     people.add(p);
                 } else {
                     notifications.warn("Дом " + h.getOrigin()
@@ -424,19 +456,27 @@ public class Game {
         map.place(b);
         money -= bp.cost;
 
-        if (b instanceof Factory f) {
+        if (b instanceof Processor p) {
+            processors.add(p);
+            //autoBindAllProcessors();
+            rebuildAllRoutes();
+            GameEvents.built(notifications, p.getTypeName());
+        } else if (b instanceof Factory f) {
             factories.add(f);
+            //autoBindAllFactories();
+            //autoBindAllProcessors();
+            rebuildAllRoutes();
             GameEvents.built(notifications, f.getTypeName());
         } else if (b instanceof Shop s) {
             shops.add(s);
+            //autoBindAllProcessors();
+            rebuildAllRoutes();
             GameEvents.built(notifications, "Магазин " + s.getOrigin());
         } else if (b instanceof House h) {
             houses.add(h);
             GameEvents.built(notifications, "Дом " + h.getOrigin());
         } else if (b instanceof Road road) {
             graphBuilder.rebuild();
-            // Дорога изменилась — пересчитываем ВСЕ маршруты.
-            // Может оказаться, что теперь путь стал короче.
             rebuildAllRoutes();
         }
         return null;
@@ -462,22 +502,34 @@ public class Game {
         String name = b.getTypeName() + " " + b.getOrigin();
         double price = b.getSellPrice();
 
+        if (b instanceof Processor p) {
+            processors.remove(p);
+            removeCarsInvolving(p);
+            dispatcher.unbindAllForProcessor(p);
+            map.remove(b);
+            money += price;
+            GameEvents.sold(notifications, name, price);
+            rebuildAllRoutes();
+            return null;
+        }
         if (b instanceof Factory f) {
             factories.remove(f);
-            removeCarsForFactory(f);
+            removeCarsInvolving(f);
             dispatcher.unbindAll(f);
             map.remove(b);
             money += price;
             GameEvents.sold(notifications, name, price);
+            rebuildAllRoutes();
             return null;
         }
         if (b instanceof Shop s) {
             shops.remove(s);
-            removeCarsForShop(s);
+            removeCarsInvolving(s);
             dispatcher.unbindAll(s);
             map.remove(b);
             money += price;
             GameEvents.sold(notifications, name, price);
+            rebuildAllRoutes();
             return null;
         }
         if (b instanceof House h) {
@@ -513,19 +565,18 @@ public class Game {
 
     // ================== УДАЛЕНИЕ МАШИН ==================
 
-    private void removeCarsForFactory(Factory f) {
-        Iterator<Car> it = cars.iterator();
+    /**
+     * Удалить все машины, у которых поставщик или получатель — объект o.
+     * Работает для Factory, Shop и Processor одинаково.
+     */
+    private void removeCarsInvolving(Object o) {
+        Iterator<UniversalCar> it = cars.iterator();
         while (it.hasNext()) {
-            Car c = it.next();
-            if (c.getFactory() == f) { c.dispose(); it.remove(); }
-        }
-    }
-
-    private void removeCarsForShop(Shop s) {
-        Iterator<Car> it = cars.iterator();
-        while (it.hasNext()) {
-            Car c = it.next();
-            if (c.getShop() == s) { c.dispose(); it.remove(); }
+            UniversalCar c = it.next();
+            if (c.getSource() == o || c.getSink() == o) {
+                c.dispose();
+                it.remove();
+            }
         }
     }
 
@@ -535,127 +586,108 @@ public class Game {
         graphBuilder.updateVertex(p);
         for (Direction d : Direction.values()) {
             Point n = p.add(d.dx, d.dy);
-            // ВСЕГДА обновляем соседа — если он не дорога, updateVertex удалит его
             graphBuilder.updateVertex(n);
         }
     }
 
+    // ================== ПЕРЕСЧЁТ МАРШРУТОВ ==================
+
     /**
-     * Полный пересчёт всех маршрутов фабрика↔магазин.
-     *
-     * Вызывается при ЛЮБОМ изменении дорожной сети:
-     *   - построена дорога,
-     *   - снесена дорога,
-     *   - повёрнута дорога.
-     *
-     * Для каждой привязки:
-     *   - ищем новый кратчайший путь «туда» и «обратно»;
-     *   - если оба есть — обновляем маршрут машины (даже в пути);
-     *   - если хотя бы одного нет — переводим машину в NO_ROUTE
-     *     и уведомляем игрока.
-     *
-     * Машины НЕ удаляются — они ждут, пока игрок построит дорогу.
-     *
-     * Если доставка на паузе (deliveryPaused) — маршруты всё равно
-     * обновляются в диспетчере и в машинах, но машины принудительно
-     * отзываются на фабрики и остаются в IDLE.
+     * Полный пересчёт всех маршрутов:
+     *   - Фабрика ↔ Магазин;
+     *   - Фабрика ↔ Переработчик;
+     *   - Переработчик ↔ Магазин.
+     * Все линии одинаковые с точки зрения логики — используем один помощник.
      */
-
     private void rebuildAllRoutes() {
-        // Копируем entrySet, чтобы можно было безопасно модифицировать.
-        List<Map.Entry<Shop, List<Factory>>> bindings =
-                new ArrayList<>(dispatcher.getBindings().entrySet());
-
-        System.out.println("========================================");
-        System.out.println("[rebuildAllRoutes] START, bindings=" + bindings.size()
-                + ", deliveryPaused=" + deliveryPaused
-                + ", cars=" + cars.size());
-
-        int i = 0;
-        for (Map.Entry<Shop, List<Factory>> entry : bindings) {
-            Shop shop = entry.getKey();
-            for (Factory factory : new ArrayList<>(entry.getValue())) {
-                i++;
-                System.out.println("----------------------------------------");
-                System.out.println("[rebuildAllRoutes] #" + i
-                        + " pair factory=" + factory.getOrigin()
-                        + " shop=" + shop.getOrigin());
-
-                Point factoryExit = findAdjacentRoad(factory);
-                Point shopExit = findAdjacentRoad(shop);
-
-                Car car = findCar(factory, shop);
-
-                System.out.println("  factoryExit=" + factoryExit
-                        + " (hasRoad=" + (factoryExit != null && map.hasRoad(factoryExit))
-                        + ", hasVertex=" + (factoryExit != null && graphBuilder.hasVertex(factoryExit))
-                        + ")");
-                System.out.println("  shopExit=" + shopExit
-                        + " (hasRoad=" + (shopExit != null && map.hasRoad(shopExit))
-                        + ", hasVertex=" + (shopExit != null && graphBuilder.hasVertex(shopExit))
-                        + ")");
-                System.out.println("  car=" + (car == null ? "null"
-                        : ("state=" + car.getState()
-                        + ", pos=(" + String.format("%.2f", car.getX())
-                        + "," + String.format("%.2f", car.getY()) + ")"
-                        + ", pathToShop=" + (car.getPathToShop() == null ? "null"
-                        : car.getPathToShop().size())
-                        + ", pathToFactory=" + (car.getPathToFactory() == null ? "null"
-                        : car.getPathToFactory().size()))));
-
-                // Нет выхода к дороге — маршрут невозможен.
-                if (factoryExit == null || shopExit == null) {
-                    System.out.println("  → ACTION: markNoRoute (нет выхода к дороге)");
-                    if (car != null) car.markNoRoute();
-                    GameEvents.noPath(notifications, factory, shop);
-                    continue;
-                }
-
-                List<Point> toShop = pathFinder.findPath(factoryExit, shopExit);
-                List<Point> toFactory = pathFinder.findPath(shopExit, factoryExit);
-
-                System.out.println("  toShop=" + (toShop == null ? "null"
-                        : (toShop.size() + " cells, first=" + toShop.get(0)
-                        + ", last=" + toShop.get(toShop.size() - 1))));
-                System.out.println("  toFactory=" + (toFactory == null ? "null"
-                        : (toFactory.size() + " cells, first=" + toFactory.get(0)
-                        + ", last=" + toFactory.get(toFactory.size() - 1))));
-
-                if (toShop == null || toFactory == null) {
-                    // Путь сломан — машина ждёт, уведомляем без спама.
-                    System.out.println("  → ACTION: markNoRoute (путь не найден)");
-                    if (car != null) car.markNoRoute();
-                    GameEvents.noPath(notifications, factory, shop);
-                } else {
-                    // Путь есть — обновляем маршрут.
-                    if (car != null) {
-                        System.out.println("  → ACTION: updateRoutes (car exists)");
-                        car.updateRoutes(toShop, toFactory);
-                        // Если пауза — принудительно возвращаем на фабрику.
-                        if (deliveryPaused) {
-                            System.out.println("     + recall() (deliveryPaused)");
-                            car.recall();
-                        }
-                    } else {
-                        // Машины нет — создаём заново (на случай, если
-                        // её удалили или привязка была создана вручную).
-                        System.out.println("  → ACTION: new Car (car was null)");
-                        Car newCar = new Car(factory, shop, toShop, toFactory);
-                        newCar.setDeliveryEnabled(!deliveryPaused);
-                        cars.add(newCar);
-                    }
-                    // Синхронизируем пути в диспетчере.
-                    dispatcher.updateRoute(factory, shop, toShop, toFactory);
-                }
+        // 1) Фабрика → Магазин
+        for (var e : new ArrayList<>(dispatcher.getBindings().entrySet())) {
+            Shop shop = e.getKey();
+            for (Factory f : new ArrayList<>(e.getValue())) {
+                rebuildRouteFor(f, shop,
+                        () -> GameEvents.noPath(notifications, f, shop));
             }
         }
-        System.out.println("========================================");
+
+        // 2) Фабрика → Переработчик
+        for (var e : new ArrayList<>(dispatcher.getProcessorBindings().entrySet())) {
+            Processor p = e.getKey();
+            for (Factory f : new ArrayList<>(e.getValue())) {
+                rebuildRouteFor(f, p,
+                        () -> GameEvents.noPath(notifications, f, p));
+            }
+        }
+
+        // 3) Переработчик → Магазин
+        for (Processor p : new ArrayList<>(processors)) {
+            for (Shop s : new ArrayList<>(dispatcher.getShopsForProcessor(p))) {
+                rebuildRouteFor(p, s,
+                        () -> GameEvents.noPath(notifications, p, s));
+            }
+        }
     }
 
-    /** Найти машину, обслуживающую данную пару фабрика↔магазин. */
-    private Car findCar(Factory f, Shop s) {
-        for (Car c : cars) {
-            if (c.getFactory() == f && c.getShop() == s) return c;
+    /**
+     * Пересчитать одну пару «источник → получатель».
+     * Если машины ещё нет — создать. Если есть — обновить маршрут
+     * (или увести в NO_ROUTE при отсутствии пути).
+     */
+    private void rebuildRouteFor(CargoSource src, CargoSink dst,
+                                 Runnable notFoundAction) {
+        // Для поиска выхода нужен Building — но у нас есть только интерфейсы.
+        // Все реальные реализации (Factory, Shop, Processor) — это Building,
+        // так что каст безопасен. Если вдруг появится другой поставщик
+        // без Building — вернёт null и уйдёт в notFound.
+        Building srcB = (src instanceof Building b) ? b : null;
+        Building dstB = (dst instanceof Building b) ? b : null;
+
+        Point srcExit = (srcB != null) ? findAdjacentRoad(srcB) : null;
+        Point dstExit = (dstB != null) ? findAdjacentRoad(dstB) : null;
+
+        UniversalCar car = findCar(src, dst);
+
+        if (srcExit == null || dstExit == null) {
+            if (car != null) car.markNoRoute();
+            notFoundAction.run();
+            return;
+        }
+
+        List<Point> toSink   = pathFinder.findPath(srcExit, dstExit);
+        List<Point> toSource = pathFinder.findPath(dstExit, srcExit);
+
+        if (toSink == null || toSource == null) {
+            if (car != null) car.markNoRoute();
+            notFoundAction.run();
+            return;
+        }
+
+        if (car != null) {
+            car.updateRoutes(toSink, toSource);
+            if (deliveryPaused) car.recall();
+        } else {
+            UniversalCar newCar = new UniversalCar(src, dst, toSink, toSource);
+            newCar.setDeliveryEnabled(!deliveryPaused);
+            cars.add(newCar);
+        }
+
+        // Синхронизируем пути в диспетчере.
+        updateDispatcherRoute(src, dst, toSink, toSource);
+    }
+
+    private void updateDispatcherRoute(CargoSource src, CargoSink dst,
+                                       List<Point> toSink, List<Point> toSource) {
+        if (src instanceof Factory f && dst instanceof Shop s) {
+            dispatcher.updateRoute(f, s, toSink, toSource);
+        } else if (src instanceof Factory f && dst instanceof Processor p) {
+            dispatcher.updateFactoryToProcessorRoute(f, p, toSink, toSource);
+        } else if (src instanceof Processor p && dst instanceof Shop s) {
+            dispatcher.updateProcessorToShopRoute(p, s, toSink, toSource);
+        }
+    }
+
+    private UniversalCar findCar(CargoSource src, CargoSink dst) {
+        for (UniversalCar c : cars) {
+            if (c.getSource() == src && c.getSink() == dst) return c;
         }
         return null;
     }
@@ -663,27 +695,74 @@ public class Game {
     // ================== ПРИВЯЗКА ==================
 
     private boolean bindFactoryToShop(Factory f, Shop shop) {
-        Point factoryExit = findAdjacentRoad(f);
-        Point shopExit = findAdjacentRoad(shop);
-        if (factoryExit == null || shopExit == null) return false;
+        Point fe = findAdjacentRoad(f);
+        Point se = findAdjacentRoad(shop);
+        if (fe == null || se == null) return false;
 
-        List<Point> toShop = pathFinder.findPath(factoryExit, shopExit);
+        List<Point> toShop = pathFinder.findPath(fe, se);
         if (toShop == null) {
             GameEvents.noPath(notifications, f, shop);
             return false;
         }
-        List<Point> toFactory = pathFinder.findPath(shopExit, factoryExit);
+        List<Point> toFactory = pathFinder.findPath(se, fe);
         if (toFactory == null) {
             GameEvents.noPath(notifications, f, shop);
             return false;
         }
         if (!dispatcher.bind(f, shop, toShop, toFactory)) return false;
 
-        Car car = new Car(f, shop, toShop, toFactory);
-        // Учитываем текущее состояние паузы.
+        addCar(f, shop, toShop, toFactory);
+        return true;
+    }
+
+    private boolean bindFactoryToProcessor(Factory f, Processor p) {
+        Point fe = findAdjacentRoad(f);
+        Point pe = findAdjacentRoad(p);
+        if (fe == null || pe == null) return false;
+
+        List<Point> toProcessor = pathFinder.findPath(fe, pe);
+        if (toProcessor == null) {
+            GameEvents.noPath(notifications, f, p);
+            return false;
+        }
+        List<Point> toFactory = pathFinder.findPath(pe, fe);
+        if (toFactory == null) {
+            GameEvents.noPath(notifications, f, p);
+            return false;
+        }
+        if (!dispatcher.bindFactoryToProcessor(f, p, toProcessor, toFactory)) return false;
+
+        addCar(f, p, toProcessor, toFactory);
+        return true;
+    }
+
+    private boolean bindProcessorToShop(Processor p, Shop shop) {
+        Point pe = findAdjacentRoad(p);
+        Point se = findAdjacentRoad(shop);
+        if (pe == null || se == null) return false;
+
+        List<Point> toShop = pathFinder.findPath(pe, se);
+        if (toShop == null) {
+            GameEvents.noPath(notifications, p, shop);
+            return false;
+        }
+        List<Point> toProcessor = pathFinder.findPath(se, pe);
+        if (toProcessor == null) {
+            GameEvents.noPath(notifications, p, shop);
+            return false;
+        }
+        if (!dispatcher.bindProcessorToShop(p, shop, toShop, toProcessor)) return false;
+
+        addCar(p, shop, toShop, toProcessor);
+        return true;
+    }
+
+    /** Создать машину и сразу учесть паузу доставки. */
+    private void addCar(CargoSource src, CargoSink dst,
+                        List<Point> toSink, List<Point> toSource) {
+        UniversalCar car = new UniversalCar(src, dst, toSink, toSource);
         car.setDeliveryEnabled(!deliveryPaused);
         cars.add(car);
-        return true;
     }
 
     private int countBoundShops(Factory f) {
@@ -703,7 +782,7 @@ public class Game {
                         p.add(-1, 0), p.add(1, 0)
                 };
                 for (Point c : candidates) {
-                    if (map.hasRoad(c) && graphBuilder.hasVertex(c)) {  // ← проверка графа
+                    if (map.hasRoad(c) && graphBuilder.hasVertex(c)) {
                         return c;
                     }
                 }
@@ -717,7 +796,7 @@ public class Game {
     public void spend(double amount) { if (money >= amount) money -= amount; }
     public void earn(double amount) { money += amount; }
 
-    // ================== РУЧНАЯ ПРИВЯЗКА ==================
+    // ================== РУЧНАЯ ПРИВЯЗКА (Фабрика ↔ Магазин) ==================
 
     public String bindManual(Factory f, Shop s) {
         if (f == null || s == null) return "Не выбраны фабрика или магазин";
@@ -744,14 +823,7 @@ public class Game {
         if (f == null || s == null) return "Не выбраны фабрика или магазин";
         if (!dispatcher.isBound(f, s)) return "Этой связи нет";
         dispatcher.unbind(f, s);
-        Iterator<Car> it = cars.iterator();
-        while (it.hasNext()) {
-            Car c = it.next();
-            if (c.getFactory() == f && c.getShop() == s) {
-                c.dispose();
-                it.remove();
-            }
-        }
+        removeCar(f, s);
         notifications.info("Связь разорвана");
         return null;
     }
@@ -774,6 +846,76 @@ public class Game {
         return "Не нашлось подходящей фабрики";
     }
 
+    // ================== РУЧНАЯ ПРИВЯЗКА: Фабрика → Переработчик ==================
+
+    public String bindFactoryToProcessorManual(Factory f, Processor p) {
+        if (f == null || p == null) return "Не выбраны фабрика или переработчик";
+        if (!factories.contains(f)) return "Фабрика уже снесена";
+        if (!processors.contains(p)) return "Переработчик уже снесён";
+        if (!p.acceptsIngredient(f.getProduct()))
+            return "Переработчик не принимает «" + f.getProduct().title + "»";
+        if (!dispatcher.canBindToProcessor(f, p)) {
+            int lim = p.getMaxFactoriesPerIngredient();
+            int already = dispatcher.countFactoriesOfIngredient(p, f.getProduct());
+            return "Переработчик уже принимает " + already + "/" + lim
+                    + " фабрик типа «" + f.getProduct().title + "»";
+        }
+        if (bindFactoryToProcessor(f, p)) {
+            notifications.success("Фабрика " + f.getOrigin()
+                    + " подключена к переработчику " + p.getOrigin());
+            return null;
+        }
+        return "Не удалось построить маршрут";
+    }
+
+    public String unbindFactoryFromProcessorManual(Factory f, Processor p) {
+        if (f == null || p == null) return "Не выбраны фабрика или переработчик";
+        dispatcher.unbindFactoryFromProcessor(f, p);
+        removeCar(f, p);
+        notifications.info("Связь фабрика↔переработчик разорвана");
+        return null;
+    }
+
+    // ================== РУЧНАЯ ПРИВЯЗКА: Переработчик → Магазин ==================
+
+    public String bindProcessorToShopManual(Processor p, Shop s) {
+        if (p == null || s == null) return "Не выбраны переработчик или магазин";
+        if (!processors.contains(p)) return "Переработчик уже снесён";
+        if (!shops.contains(s))      return "Магазин уже снесён";
+        if (dispatcher.getProcessorsForShop(s).contains(p))
+            return "Этот переработчик уже привязан к магазину";
+        List<Shop> current = dispatcher.getShopsForProcessor(p);
+        if (current.size() >= p.getMaxShops())
+            return "Переработчик обслуживает максимум магазинов ("
+                    + p.getMaxShops() + ")";
+        if (bindProcessorToShop(p, s)) {
+            notifications.success("Переработчик " + p.getOrigin()
+                    + " подключён к магазину " + s.getOrigin());
+            return null;
+        }
+        return "Не удалось построить маршрут";
+    }
+
+    public String unbindProcessorFromShopManual(Processor p, Shop s) {
+        if (p == null || s == null) return "Не выбраны переработчик или магазин";
+        dispatcher.unbindProcessorFromShop(p, s);
+        removeCar(p, s);
+        notifications.info("Связь переработчик↔магазин разорвана");
+        return null;
+    }
+
+    /** Удалить одну конкретную машину по паре src/dst. */
+    private void removeCar(CargoSource src, CargoSink dst) {
+        Iterator<UniversalCar> it = cars.iterator();
+        while (it.hasNext()) {
+            UniversalCar c = it.next();
+            if (c.getSource() == src && c.getSink() == dst) {
+                c.dispose();
+                it.remove();
+            }
+        }
+    }
+
     // ================== ПОВОРОТ ДОРОГИ ==================
 
     public void rotateRoadAt(Point cell) {
@@ -783,46 +925,27 @@ public class Game {
         if (road.isCross())    return;
         road.rotateCW();
         graphBuilder.rebuild();
-        // Граф изменился — маршруты могли поменяться.
         rebuildAllRoutes();
     }
 
     // ================== ОТЗЫВ / ВОЗОБНОВЛЕНИЕ ДОСТАВКИ ==================
 
-    /**
-     * Отозвать все машины на их фабрики и запретить им выезжать.
-     *
-     * Действие:
-     *   - выставляет deliveryPaused = true;
-     *   - каждой машине ставит setDeliveryEnabled(false) и зовёт recall();
-     *   - машины телепортируются на стартовые клетки своих маршрутов
-     *     и остаются в IDLE, пока не будет вызван resumeAllCars().
-     *
-     * Маршруты при этом продолжают пересчитываться (если игрок построит
-     * или снесёт дорогу) — но машины не поедут, пока пауза не снята.
-     */
     public void recallAllCars() {
         deliveryPaused = true;
-        for (Car c : cars) {
+        for (UniversalCar c : cars) {
             c.setDeliveryEnabled(false);
             c.recall();
         }
-        notifications.info("🚚 Все машины отозваны на фабрики");
+        notifications.info("🚚 Все машины отозваны к поставщикам");
     }
 
-    /**
-     * Возобновить доставку: машины снова начнут выезжать по маршрутам.
-     */
     public void resumeAllCars() {
         deliveryPaused = false;
         rebuildAllRoutes();
-        for (Car c : cars) {
-            c.setDeliveryEnabled(true);
-        }
+        for (UniversalCar c : cars) c.setDeliveryEnabled(true);
         notifications.success("🚚 Доставка возобновлена");
     }
 
-    /** На паузе ли доставка. */
     public boolean isDeliveryPaused() {
         return deliveryPaused;
     }
@@ -834,7 +957,8 @@ public class Game {
     public List<Factory> getFactories() { return factories; }
     public List<Shop> getShops() { return shops; }
     public List<House> getHouses() { return houses; }
-    public List<Car> getCars() { return cars; }
+    public List<Processor> getProcessors() { return processors; }
+    public List<UniversalCar> getCars() { return cars; }
     public List<Person> getPeople() { return people; }
 
     public Dispatcher getDispatcher() { return dispatcher; }

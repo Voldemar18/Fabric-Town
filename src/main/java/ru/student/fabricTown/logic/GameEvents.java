@@ -2,6 +2,7 @@ package ru.student.fabricTown.logic;
 
 import ru.student.fabricTown.agents.Product;
 import ru.student.fabricTown.buildings.Factory;
+import ru.student.fabricTown.buildings.Processor;
 import ru.student.fabricTown.buildings.Shop;
 import ru.student.fabricTown.core.NotificationCenter;
 
@@ -89,5 +90,19 @@ public final class GameEvents {
         String tag = "route-broken:" + System.identityHashCode(f) + ":" + System.identityHashCode(s);
         n.error("Маршрут фабрика→магазин нарушен (дорога снесена). "
                 + "Ф: " + f.getOrigin() + " → М: " + s.getOrigin(), tag);
+    }
+
+    public static void noPath(NotificationCenter n, Factory f, Processor p) {
+        String tag = "no-path-fp:" + System.identityHashCode(f)
+                + ":" + System.identityHashCode(p);
+        n.error("Нет пути от фабрики " + f.getOrigin()
+                + " к переработчику " + p.getOrigin(), tag);
+    }
+
+    public static void noPath(NotificationCenter n, Processor p, Shop s) {
+        String tag = "no-path-ps:" + System.identityHashCode(p)
+                + ":" + System.identityHashCode(s);
+        n.error("Нет пути от переработчика " + p.getOrigin()
+                + " к магазину " + s.getOrigin(), tag);
     }
 }

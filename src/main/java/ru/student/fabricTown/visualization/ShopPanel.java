@@ -1,10 +1,7 @@
 package ru.student.fabricTown.visualization;
 
 import ru.student.fabricTown.agents.Product;
-import ru.student.fabricTown.buildings.Building;
-import ru.student.fabricTown.buildings.Factory;
-import ru.student.fabricTown.buildings.House;
-import ru.student.fabricTown.buildings.Shop;
+import ru.student.fabricTown.buildings.*;
 import ru.student.fabricTown.core.Game;
 import ru.student.fabricTown.map.Point;
 
@@ -17,22 +14,24 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 /**
- * Правая панель: список объектов игрока, продажа и управление связями
- * «фабрика ↔ магазин».
+ * Правая панель: список объектов игрока, продажа и управление связями.
  *
- * Логика связей для магазина:
- *   - лимит фабрик задаётся ПО ТИПУ ТОВАРА (Shop.getMaxFactoriesPerType):
- *       S1x1 → 1 на тип, S1x2/S2x1 → 2 на тип, S2x2 → 3 на тип;
- *   - список фабрик в панели разбит по типам, у каждого типа свой счётчик.
+ * Поддерживаемые ручные привязки:
+ *   1) Фабрика  ↔ Магазин       (bindManual / unbindManual)
+ *   2) Фабрика  → Переработчик  (bindFactoryToProcessorManual / unbindFactoryFromProcessorManual)
+ *   3) Переработчик → Магазин   (bindProcessorToShopManual / unbindProcessorFromShopManual)
  *
- * Логика связей для фабрики:
- *   - лимит магазинов задаётся суммарно (Factory.getMaxShops);
- *   - при добавлении магазина проверяется, что у него ещё есть место
- *     для фабрики ЭТОГО типа (Dispatcher.canBind).
+ * Для фабрики в панели видно ДВЕ секции:
+ *   - «Магазины» — обычная доставка готового товара;
+ *   - «Переработчики» — сдача ингредиентов по рецепту.
  *
- * Дополнительно:
- *   - для фабрики показывается грузоподъёмность её машины
- *     (Factory.getCarryCapacity — 10/13/16/19 по размеру).
+ * Для магазина видно:
+ *   - «Фабрики (по типам)» — обычные поставки;
+ *   - «Переработчики» — поставки готового продукта.
+ *
+ * Для переработчика видно:
+ *   - «Фабрики-ингредиенты (по типам)» — что принимает рецепт;
+ *   - «Магазины-получатели» — куда отгружает готовое.
  */
 public class ShopPanel extends JPanel {
 
@@ -61,14 +60,12 @@ public class ShopPanel extends JPanel {
         setBackground(new Color(35, 35, 45));
         setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, new Color(60, 60, 80)));
 
-        // Заголовок
         JLabel title = new JLabel("🏬 Мои объекты");
         title.setForeground(Color.WHITE);
         title.setFont(new Font("SansSerif", Font.BOLD, 16));
         title.setBorder(new EmptyBorder(12, 12, 8, 12));
         add(title, BorderLayout.NORTH);
 
-        // Список объектов
         list.setBackground(new Color(45, 45, 60));
         list.setForeground(Color.WHITE);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -87,20 +84,17 @@ public class ShopPanel extends JPanel {
         listScroll.setPreferredSize(new Dimension(0, 180));
         add(listScroll, BorderLayout.CENTER);
 
-        // Нижний блок: инфо + связи + кнопки
         JPanel bottom = new JPanel();
         bottom.setLayout(new BoxLayout(bottom, BoxLayout.Y_AXIS));
         bottom.setBackground(new Color(35, 35, 45));
         bottom.setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        // infoLabel
         infoLabel.setForeground(new Color(200, 200, 200));
         infoLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
         infoLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         bottom.add(infoLabel);
         bottom.add(Box.createVerticalStrut(6));
 
-        // bindingsPanel в скролле
         bindingsPanel.setLayout(new BoxLayout(bindingsPanel, BoxLayout.Y_AXIS));
         bindingsPanel.setBackground(new Color(35, 35, 45));
         bindingsPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -108,13 +102,12 @@ public class ShopPanel extends JPanel {
         JScrollPane bindScroll = new JScrollPane(bindingsPanel);
         bindScroll.setBorder(null);
         bindScroll.getVerticalScrollBar().setUnitIncrement(16);
-        bindScroll.setPreferredSize(new Dimension(0, 240));
+        bindScroll.setPreferredSize(new Dimension(0, 340));   // NEW: чуть выше — две секции
         bindScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
         bindScroll.getViewport().setBackground(new Color(35, 35, 45));
         bottom.add(bindScroll);
         bottom.add(Box.createVerticalStrut(6));
 
-        // Кнопка «связать автоматически»
         autoBindButton.setBackground(new Color(60, 100, 140));
         autoBindButton.setForeground(Color.WHITE);
         autoBindButton.setFocusPainted(false);
@@ -126,7 +119,6 @@ public class ShopPanel extends JPanel {
         bottom.add(autoBindButton);
         bottom.add(Box.createVerticalStrut(6));
 
-        // Кнопка «продать»
         sellButton.setBackground(new Color(120, 80, 40));
         sellButton.setForeground(Color.WHITE);
         sellButton.setFocusPainted(false);
@@ -139,7 +131,6 @@ public class ShopPanel extends JPanel {
 
         add(bottom, BorderLayout.SOUTH);
 
-        // Периодическое обновление списка объектов и связей
         Timer t = new Timer(true);
         t.scheduleAtFixedRate(new TimerTask() {
             @Override
@@ -157,16 +148,15 @@ public class ShopPanel extends JPanel {
 
         for (Factory f : game.getFactories()) model.addElement(f);
         for (Shop s : game.getShops()) model.addElement(s);
+        for (Processor p : game.getProcessors()) model.addElement(p);
         for (House h : game.getHouses()) model.addElement(h);
 
-        // Восстанавливаем выделение, если объект ещё существует
         for (int i = 0; i < model.size(); i++) {
             if (model.get(i) == prev) {
                 list.setSelectedIndex(i);
                 return;
             }
         }
-        // Объект удалён — сбрасываем
         if (prev != null && !model.contains(prev)) {
             selected = null;
             updateInfo();
@@ -176,7 +166,6 @@ public class ShopPanel extends JPanel {
     // ==================== ИНФО О ВЫБРАННОМ ====================
 
     private void updateInfo() {
-        // Обновляем панель связей ВСЕГДА — даже если selected == null
         rebuildBindingsPanel();
 
         if (selected == null) {
@@ -194,9 +183,12 @@ public class ShopPanel extends JPanel {
         if (selected instanceof Factory f) {
             sb.append("Склад: ").append(f.getStorageCount())
                     .append("/").append(f.getMaxStorage()).append("<br>");
-            int bound = game.getDispatcher().getFactoriesForShopCount(f);
-            sb.append("Обслуживает: ").append(bound)
-                    .append("/").append(f.getMaxShops()).append(" магазинов<br>");
+            int boundShops = game.getDispatcher().getFactoriesForShopCount(f);
+            sb.append("Магазинов: ").append(boundShops)
+                    .append("/").append(f.getMaxShops()).append("<br>");
+            int boundProcessors =
+                    game.getDispatcher().getProcessorsForFactory(f).size();
+            sb.append("Переработчиков: ").append(boundProcessors).append("<br>");
             sb.append("Вместимость машины: ").append(f.getCarryCapacity())
                     .append(" шт.");
         } else if (selected instanceof Shop s) {
@@ -204,11 +196,28 @@ public class ShopPanel extends JPanel {
                     .append("/").append(s.getCapacity()).append("<br>");
             int bound = game.getDispatcher().getFactoriesFor(s).size();
             int maxTotal = s.getMaxFactoriesPerType() * Product.values().length;
-            sb.append("Фабрик привязано: ").append(bound)
-                    .append("/").append(maxTotal)
-                    .append(" (лимит по типу: ").append(s.getMaxFactoriesPerType())
-                    .append(")<br>");
+            sb.append("Фабрик: ").append(bound).append("/").append(maxTotal)
+                    .append(" (лимит по типу: ")
+                    .append(s.getMaxFactoriesPerType()).append(")<br>");
+            int proc = game.getDispatcher().getProcessorsForShop(s).size();
+            sb.append("Переработчиков: ").append(proc).append("<br>");
             sb.append("Продано на: ").append((int) s.getMoneyEarned()).append(" 💰");
+        } else if (selected instanceof Processor p) {   // NEW
+            sb.append("Рецепт: ");
+            p.getRecipe().inputs.forEach((prod, qty) ->
+                    sb.append(prod.title).append("×").append(qty).append(" "));
+            sb.append("→ ").append(p.getOutputProduct().title).append("<br>");
+
+            sb.append("Ингредиентов: ").append(p.totalInputStored())
+                    .append("/").append(p.getInputCapacity()).append("<br>");
+            sb.append("Готово: ").append(p.getOutputCount())
+                    .append("/").append(p.getOutputCapacity()).append("<br>");
+
+            int fac = game.getDispatcher().getFactoriesForProcessor(p).size();
+            sb.append("Фабрик: ").append(fac).append("<br>");
+            int shops = game.getDispatcher().getShopsForProcessor(p).size();
+            sb.append("Магазинов: ").append(shops)
+                    .append("/").append(p.getMaxShops());
         } else if (selected instanceof House h) {
             sb.append("Жителей: ").append(h.getResidents());
         }
@@ -229,15 +238,18 @@ public class ShopPanel extends JPanel {
             buildShopBindings(shop);
         } else if (selected instanceof Factory factory) {
             buildFactoryBindings(factory);
+        } else if (selected instanceof Processor processor) {   // NEW
+            buildProcessorBindings(processor);
         }
 
         bindingsPanel.revalidate();
         bindingsPanel.repaint();
     }
 
-    // ---------------- Связи МАГАЗИНА: разбито по типам ----------------
+    // ---------------- Связи МАГАЗИНА ----------------
 
     private void buildShopBindings(Shop shop) {
+        // === Секция 1: фабрики по типам ===
         List<Factory> bound = game.getDispatcher().getFactoriesFor(shop);
 
         JLabel hdr = new JLabel("Фабрики для магазина (по типам):");
@@ -249,8 +261,8 @@ public class ShopPanel extends JPanel {
 
         int limitPerType = shop.getMaxFactoriesPerType();
 
-        // Проходим по каждому типу товара
         for (Product type : Product.values()) {
+            if (!type.isRawMaterial()) continue;   // шоколад в магазин везёт переработчик
             List<Factory> boundOfType = new ArrayList<>();
             for (Factory f : bound) {
                 if (f.getProduct() == type) boundOfType.add(f);
@@ -268,20 +280,16 @@ public class ShopPanel extends JPanel {
             typeHdr.setBorder(new EmptyBorder(6, 0, 2, 0));
             bindingsPanel.add(typeHdr);
 
-            // Уже привязанные фабрики этого типа
             for (Factory f : boundOfType) {
                 JPanel row = createBindingRow(
                         "  ✔ " + f.getOrigin(),
                         new Color(180, 255, 180),
-                        "✖",
-                        new Color(140, 60, 60),
-                        true,
-                        () -> doUnbind(f, shop));
+                        "✖", new Color(140, 60, 60), true,
+                        () -> doUnbindFactoryShop(f, shop));
                 bindingsPanel.add(row);
                 bindingsPanel.add(Box.createVerticalStrut(2));
             }
 
-            // Доступные фабрики этого типа
             boolean canAdd = !full;
             for (Factory f : game.getFactories()) {
                 if (f.getProduct() != type) continue;
@@ -296,12 +304,9 @@ public class ShopPanel extends JPanel {
                 if (factoryBusy) label += "  (занята)";
 
                 JPanel row = createBindingRow(
-                        label,
-                        new Color(200, 200, 200),
-                        "+",
-                        new Color(60, 120, 60),
-                        enabled,
-                        () -> doBind(f, shop));
+                        label, new Color(200, 200, 200),
+                        "+", new Color(60, 120, 60), enabled,
+                        () -> doBindFactoryShop(f, shop));
                 bindingsPanel.add(row);
                 bindingsPanel.add(Box.createVerticalStrut(2));
             }
@@ -310,11 +315,53 @@ public class ShopPanel extends JPanel {
         if (bound.isEmpty()) {
             autoBindButton.setVisible(true);
         }
+
+        // === Секция 2: переработчики-поставщики (NEW) ===
+        bindingsPanel.add(Box.createVerticalStrut(10));
+
+        List<Processor> boundProcs = game.getDispatcher().getProcessorsForShop(shop);
+        JLabel procHdr = new JLabel("Переработчики:");
+        procHdr.setForeground(Color.WHITE);
+        procHdr.setFont(new Font("SansSerif", Font.BOLD, 11));
+        procHdr.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bindingsPanel.add(procHdr);
+        bindingsPanel.add(Box.createVerticalStrut(4));
+
+        // Уже привязанные
+        for (Processor p : boundProcs) {
+            JPanel row = createBindingRow(
+                    "  ✔ " + p.getOrigin() + " (" + p.getOutputProduct().title + ")",
+                    new Color(220, 180, 220),
+                    "✖", new Color(140, 60, 60), true,
+                    () -> doUnbindProcessorShop(p, shop));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
+
+        // Доступные
+        for (Processor p : game.getProcessors()) {
+            if (boundProcs.contains(p)) continue;
+            boolean alreadyAtMax =
+                    game.getDispatcher().getShopsForProcessor(p).size()
+                            >= p.getMaxShops();
+            boolean enabled = !alreadyAtMax;
+
+            String label = "  " + p.getOrigin() + " (" + p.getOutputProduct().title + ")";
+            if (alreadyAtMax) label += "  (занят)";
+
+            JPanel row = createBindingRow(
+                    label, new Color(200, 200, 200),
+                    "+", new Color(120, 60, 120), enabled,
+                    () -> doBindProcessorShop(p, shop));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
     }
 
-    // ---------------- Связи ФАБРИКИ: список магазинов ----------------
+    // ---------------- Связи ФАБРИКИ ----------------
 
     private void buildFactoryBindings(Factory factory) {
+        // === Секция 1: магазины (как было) ===
         List<Shop> bound = game.getDispatcher().getShopsFor(factory);
 
         JLabel hdr = new JLabel("Магазины для этой фабрики (" +
@@ -325,20 +372,16 @@ public class ShopPanel extends JPanel {
         bindingsPanel.add(hdr);
         bindingsPanel.add(Box.createVerticalStrut(4));
 
-        // Уже привязанные
         for (Shop s : bound) {
             JPanel row = createBindingRow(
                     s.getOrigin().toString(),
                     new Color(180, 255, 180),
-                    "✖",
-                    new Color(140, 60, 60),
-                    true,
-                    () -> doUnbind(factory, s));
+                    "✖", new Color(140, 60, 60), true,
+                    () -> doUnbindFactoryShop(factory, s));
             bindingsPanel.add(row);
             bindingsPanel.add(Box.createVerticalStrut(2));
         }
 
-        // Доступные
         boolean canAdd = bound.size() < factory.getMaxShops();
         for (Shop s : game.getShops()) {
             if (bound.contains(s)) continue;
@@ -356,12 +399,152 @@ public class ShopPanel extends JPanel {
             }
 
             JPanel row = createBindingRow(
-                    label,
-                    new Color(200, 200, 200),
-                    "+",
-                    new Color(60, 120, 60),
-                    enabled,
-                    () -> doBind(factory, s));
+                    label, new Color(200, 200, 200),
+                    "+", new Color(60, 120, 60), enabled,
+                    () -> doBindFactoryShop(factory, s));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
+
+        // === Секция 2: переработчики (NEW) ===
+        bindingsPanel.add(Box.createVerticalStrut(10));
+
+        List<Processor> boundProcs = game.getDispatcher().getProcessorsForFactory(factory);
+        JLabel procHdr = new JLabel("Переработчики-получатели:");
+        procHdr.setForeground(Color.WHITE);
+        procHdr.setFont(new Font("SansSerif", Font.BOLD, 11));
+        procHdr.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bindingsPanel.add(procHdr);
+        bindingsPanel.add(Box.createVerticalStrut(4));
+
+        // Уже привязанные
+        for (Processor p : boundProcs) {
+            JPanel row = createBindingRow(
+                    "  ✔ " + p.getOrigin() + " (" + p.getOutputProduct().title + ")",
+                    new Color(220, 180, 220),
+                    "✖", new Color(140, 60, 60), true,
+                    () -> doUnbindFactoryProcessor(factory, p));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
+
+        // Доступные — только те, куда фабрика подходит по рецепту
+        for (Processor p : game.getProcessors()) {
+            if (boundProcs.contains(p)) continue;
+            if (!p.acceptsIngredient(factory.getProduct())) continue;
+
+            boolean full = !game.getDispatcher()
+                    .canBindToProcessor(factory, p);
+            boolean enabled = !full;
+
+            String label = "  " + p.getOrigin()
+                    + " (" + p.getOutputProduct().title + ")";
+            if (full) {
+                int used = game.getDispatcher()
+                        .countFactoriesOfIngredient(p, factory.getProduct());
+                int lim = p.getMaxFactoriesPerIngredient();
+                label += "  (" + used + "/" + lim + " "
+                        + factory.getProduct().title + ")";
+            }
+
+            JPanel row = createBindingRow(
+                    label, new Color(200, 200, 200),
+                    "+", new Color(120, 60, 120), enabled,
+                    () -> doBindFactoryProcessor(factory, p));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
+    }
+
+    // ---------------- Связи ПЕРЕРАБОТЧИКА (NEW) ----------------
+
+    private void buildProcessorBindings(Processor processor) {
+        // === Секция 1: фабрики-ингредиенты, разбитые по типам из рецепта ===
+        List<Factory> bound = game.getDispatcher().getFactoriesForProcessor(processor);
+
+        JLabel hdr = new JLabel("Фабрики-ингредиенты (по рецепту):");
+        hdr.setForeground(Color.WHITE);
+        hdr.setFont(new Font("SansSerif", Font.BOLD, 11));
+        hdr.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bindingsPanel.add(hdr);
+        bindingsPanel.add(Box.createVerticalStrut(4));
+
+        int limitPerType = processor.getMaxFactoriesPerIngredient();
+
+        for (Product ingredient : processor.getRecipe().inputs.keySet()) {
+            List<Factory> boundOfType = new ArrayList<>();
+            for (Factory f : bound) {
+                if (f.getProduct() == ingredient) boundOfType.add(f);
+            }
+
+            int used = boundOfType.size();
+            boolean full = used >= limitPerType;
+
+            JLabel typeHdr = new JLabel(ingredient.title + "  " + used + "/" + limitPerType);
+            typeHdr.setForeground(full
+                    ? new Color(255, 180, 100)
+                    : new Color(180, 220, 255));
+            typeHdr.setFont(new Font("SansSerif", Font.BOLD, 11));
+            typeHdr.setAlignmentX(Component.LEFT_ALIGNMENT);
+            typeHdr.setBorder(new EmptyBorder(6, 0, 2, 0));
+            bindingsPanel.add(typeHdr);
+
+            for (Factory f : boundOfType) {
+                JPanel row = createBindingRow(
+                        "  ✔ " + f.getOrigin(),
+                        new Color(180, 255, 180),
+                        "✖", new Color(140, 60, 60), true,
+                        () -> doUnbindFactoryProcessor(f, processor));
+                bindingsPanel.add(row);
+                bindingsPanel.add(Box.createVerticalStrut(2));
+            }
+
+            boolean canAdd = !full;
+            for (Factory f : game.getFactories()) {
+                if (f.getProduct() != ingredient) continue;
+                if (boundOfType.contains(f)) continue;
+
+                boolean enabled = canAdd;
+
+                JPanel row = createBindingRow(
+                        "  " + f.getOrigin(), new Color(200, 200, 200),
+                        "+", new Color(60, 120, 60), enabled,
+                        () -> doBindFactoryProcessor(f, processor));
+                bindingsPanel.add(row);
+                bindingsPanel.add(Box.createVerticalStrut(2));
+            }
+        }
+
+        // === Секция 2: магазины-получатели ===
+        bindingsPanel.add(Box.createVerticalStrut(10));
+
+        List<Shop> boundShops = game.getDispatcher().getShopsForProcessor(processor);
+        JLabel shopHdr = new JLabel("Магазины-получатели (" +
+                boundShops.size() + "/" + processor.getMaxShops() + "):");
+        shopHdr.setForeground(Color.WHITE);
+        shopHdr.setFont(new Font("SansSerif", Font.BOLD, 11));
+        shopHdr.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bindingsPanel.add(shopHdr);
+        bindingsPanel.add(Box.createVerticalStrut(4));
+
+        for (Shop s : boundShops) {
+            JPanel row = createBindingRow(
+                    "  ✔ " + s.getOrigin(),
+                    new Color(180, 220, 255),
+                    "✖", new Color(140, 60, 60), true,
+                    () -> doUnbindProcessorShop(processor, s));
+            bindingsPanel.add(row);
+            bindingsPanel.add(Box.createVerticalStrut(2));
+        }
+
+        boolean canAddShop = boundShops.size() < processor.getMaxShops();
+        for (Shop s : game.getShops()) {
+            if (boundShops.contains(s)) continue;
+
+            JPanel row = createBindingRow(
+                    "  " + s.getOrigin(), new Color(200, 200, 200),
+                    "+", new Color(60, 120, 60), canAddShop,
+                    () -> doBindProcessorShop(processor, s));
             bindingsPanel.add(row);
             bindingsPanel.add(Box.createVerticalStrut(2));
         }
@@ -398,45 +581,66 @@ public class ShopPanel extends JPanel {
 
     // ==================== ДЕЙСТВИЯ ====================
 
-    private void doBind(Factory f, Shop s) {
+    // --- Фабрика ↔ Магазин ---
+
+    private void doBindFactoryShop(Factory f, Shop s) {
         String err = game.bindManual(f, s);
-        if (err != null) {
-            JOptionPane.showMessageDialog(this, err,
-                    "Не удалось связать", JOptionPane.WARNING_MESSAGE);
-        } else {
-            updateInfo();
-        }
+        if (err != null) showError(err, "Не удалось связать");
+        else updateInfo();
     }
 
-    private void doUnbind(Factory f, Shop s) {
+    private void doUnbindFactoryShop(Factory f, Shop s) {
         String err = game.unbindManual(f, s);
-        if (err != null) {
-            JOptionPane.showMessageDialog(this, err,
-                    "Не удалось разорвать", JOptionPane.WARNING_MESSAGE);
-        } else {
-            updateInfo();
-        }
+        if (err != null) showError(err, "Не удалось разорвать");
+        else updateInfo();
+    }
+
+    // --- Фабрика ↔ Переработчик (NEW) ---
+
+    private void doBindFactoryProcessor(Factory f, Processor p) {
+        String err = game.bindFactoryToProcessorManual(f, p);
+        if (err != null) showError(err, "Не удалось связать");
+        else updateInfo();
+    }
+
+    private void doUnbindFactoryProcessor(Factory f, Processor p) {
+        String err = game.unbindFactoryFromProcessorManual(f, p);
+        if (err != null) showError(err, "Не удалось разорвать");
+        else updateInfo();
+    }
+
+    // --- Переработчик ↔ Магазин (NEW) ---
+
+    private void doBindProcessorShop(Processor p, Shop s) {
+        String err = game.bindProcessorToShopManual(p, s);
+        if (err != null) showError(err, "Не удалось связать");
+        else updateInfo();
+    }
+
+    private void doUnbindProcessorShop(Processor p, Shop s) {
+        String err = game.unbindProcessorFromShopManual(p, s);
+        if (err != null) showError(err, "Не удалось разорвать");
+        else updateInfo();
+    }
+
+    private void showError(String err, String title) {
+        JOptionPane.showMessageDialog(this, err, title,
+                JOptionPane.WARNING_MESSAGE);
     }
 
     private void onAutoBind() {
         if (!(selected instanceof Shop shop)) return;
         String err = game.autoBindShopManual(shop);
-        if (err != null) {
-            JOptionPane.showMessageDialog(this, err,
-                    "Автопривязка не удалась", JOptionPane.WARNING_MESSAGE);
-        } else {
-            updateInfo();
-        }
+        if (err != null) showError(err, "Автопривязка не удалась");
+        else updateInfo();
     }
 
     private void onSell() {
         if (selected == null) return;
         Point p = selected.getOrigin();
         String err = game.trySell(p);
-        if (err != null) {
-            JOptionPane.showMessageDialog(this, err,
-                    "Не удалось продать", JOptionPane.WARNING_MESSAGE);
-        } else {
+        if (err != null) showError(err, "Не удалось продать");
+        else {
             selected = null;
             refresh();
             updateInfo();
@@ -456,6 +660,7 @@ public class ShopPanel extends JPanel {
                 if (b instanceof Factory) icon = "🏭";
                 else if (b instanceof Shop) icon = "🏪";
                 else if (b instanceof House) icon = "🏠";
+                else if (b instanceof Processor) icon = "🍫";
                 setText(icon + " " + b.getTypeName() + " " + b.getOrigin());
             }
             setBackground(isSelected ? new Color(70, 100, 150) : new Color(45, 45, 60));
@@ -463,12 +668,9 @@ public class ShopPanel extends JPanel {
             return this;
         }
     }
+
     // ==================== ВНЕШНИЙ ВЫБОР ОБЪЕКТА ====================
 
-    /**
-     * Выбрать здание в списке программно (например, при двойном клике по карте).
-     * Если здание не найдено в списке — сбрасывает выбор.
-     */
     public void selectBuilding(Building building) {
         if (building == null) {
             list.clearSelection();
@@ -485,7 +687,6 @@ public class ShopPanel extends JPanel {
             }
         }
 
-        // Здание не найдено — сбрасываем
         list.clearSelection();
         selected = null;
         updateInfo();

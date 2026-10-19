@@ -2,6 +2,7 @@ package ru.student.fabricTown.logic;
 
 import ru.student.fabricTown.agents.Product;
 import ru.student.fabricTown.buildings.Factory;
+import ru.student.fabricTown.buildings.Processor;
 import ru.student.fabricTown.buildings.Shop;
 import ru.student.fabricTown.map.Point;
 
@@ -236,5 +237,166 @@ public class Dispatcher {
                 .put(factory, new ArrayList<>(toShop));
         routesToFactory.computeIfAbsent(shop, s -> new HashMap<>())
                 .put(factory, new ArrayList<>(toFactory));
+    }
+
+
+// --- новые поля ---
+    /** Переработчик → список фабрик (поставляют ингредиенты). */
+    private final Map<Processor, List<Factory>> processorToFactories = new HashMap<>();
+    private final Map<Processor, Map<Factory, List<Point>>> routesFactoryToProcessor = new HashMap<>();
+    private final Map<Processor, Map<Factory, List<Point>>> routesProcessorToFactory = new HashMap<>();
+
+    /** Магазин → список переработчиков (поставляют готовый продукт). */
+    private final Map<Shop, List<Processor>> shopToProcessors = new HashMap<>();
+    private final Map<Shop, Map<Processor, List<Point>>> routesProcessorToShop = new HashMap<>();
+    private final Map<Shop, Map<Processor, List<Point>>> routesShopToProcessor = new HashMap<>();
+
+    // --- привязка фабрики к переработчику ---
+    public boolean bindFactoryToProcessor(Factory factory, Processor processor,
+                                          List<Point> toProcessor, List<Point> toFactory) {
+        if (factory == null || processor == null) return false;
+        if (toProcessor == null || toFactory == null) return false;
+
+        List<Factory> list = processorToFactories.computeIfAbsent(
+                processor, p -> new ArrayList<>());
+        if (list.contains(factory)) return false;
+
+        list.add(factory);
+        routesFactoryToProcessor.computeIfAbsent(processor, p -> new HashMap<>())
+                .put(factory, new ArrayList<>(toProcessor));
+        routesProcessorToFactory.computeIfAbsent(processor, p -> new HashMap<>())
+                .put(factory, new ArrayList<>(toFactory));
+        return true;
+    }
+
+    // --- привязка переработчика к магазину ---
+    public boolean bindProcessorToShop(Processor processor, Shop shop,
+                                       List<Point> toShop, List<Point> toProcessor) {
+        if (processor == null || shop == null) return false;
+        if (toShop == null || toProcessor == null) return false;
+
+        List<Processor> list = shopToProcessors.computeIfAbsent(
+                shop, s -> new ArrayList<>());
+        if (list.size() >= processor.getMaxShops()) return false;
+        if (list.contains(processor)) return false;
+
+        list.add(processor);
+        routesProcessorToShop.computeIfAbsent(shop, s -> new HashMap<>())
+                .put(processor, new ArrayList<>(toShop));
+        routesShopToProcessor.computeIfAbsent(shop, s -> new HashMap<>())
+                .put(processor, new ArrayList<>(toProcessor));
+        return true;
+    }
+
+    // --- геттеры ---
+    public Map<Processor, List<Factory>> getProcessorBindings() { return processorToFactories; }
+    public List<Factory> getFactoriesForProcessor(Processor p) {
+        return processorToFactories.getOrDefault(p, Collections.emptyList());
+    }
+    public List<Processor> getProcessorsForShop(Shop s) {
+        return shopToProcessors.getOrDefault(s, Collections.emptyList());
+    }
+    public List<Shop> getShopsForProcessor(Processor p) {
+        List<Shop> res = new ArrayList<>();
+        for (var e : shopToProcessors.entrySet()) {
+            if (e.getValue().contains(p)) res.add(e.getKey());
+        }
+        return res;
+    }
+    public List<Point> getFactoryToProcessorRoute(Processor p, Factory f) {
+        var m = routesFactoryToProcessor.get(p);
+        return m == null ? null : m.get(f);
+    }
+    public List<Point> getProcessorToShopRoute(Shop s, Processor p) {
+        var m = routesProcessorToShop.get(s);
+        return m == null ? null : m.get(p);
+    }
+    public List<Point> getProcessorToFactoryRoute(Processor p, Factory f) {
+        var m = routesProcessorToFactory.get(p);
+        return m == null ? null : m.get(f);
+    }
+    public List<Point> getShopToProcessorRoute(Shop s, Processor p) {
+        var m = routesShopToProcessor.get(s);
+        return m == null ? null : m.get(p);
+    }
+
+    /** Сколько фабрик данного типа ингредиента уже привязано к переработчику. */
+    public int countFactoriesOfIngredient(Processor processor, Product type) {
+        List<Factory> list = processorToFactories.get(processor);
+        if (list == null) return 0;
+        int n = 0;
+        for (Factory f : list) if (f.getProduct() == type) n++;
+        return n;
+    }
+
+    /** Проверка: можно ли привязать фабрику к переработчику. */
+    public boolean canBindToProcessor(Factory f, Processor p) {
+        if (f == null || p == null) return false;
+        if (!p.acceptsIngredient(f.getProduct())) return false;
+        List<Factory> list = processorToFactories.get(p);
+        if (list != null && list.contains(f)) return false;
+        int already = countFactoriesOfIngredient(p, f.getProduct());
+        return already < p.getMaxFactoriesPerIngredient();
+    }
+
+    /** Отвязка. */
+    public void unbindFactoryFromProcessor(Factory f, Processor p) {
+        var list = processorToFactories.get(p);
+        if (list != null) {
+            list.remove(f);
+            if (list.isEmpty()) processorToFactories.remove(p);
+        }
+        var m1 = routesFactoryToProcessor.get(p);
+        if (m1 != null) { m1.remove(f); if (m1.isEmpty()) routesFactoryToProcessor.remove(p); }
+        var m2 = routesProcessorToFactory.get(p);
+        if (m2 != null) { m2.remove(f); if (m2.isEmpty()) routesProcessorToFactory.remove(p); }
+    }
+
+    public void unbindProcessorFromShop(Processor p, Shop s) {
+        var list = shopToProcessors.get(s);
+        if (list != null) {
+            list.remove(p);
+            if (list.isEmpty()) shopToProcessors.remove(s);
+        }
+        var m1 = routesProcessorToShop.get(s);
+        if (m1 != null) { m1.remove(p); if (m1.isEmpty()) routesProcessorToShop.remove(s); }
+        var m2 = routesShopToProcessor.get(s);
+        if (m2 != null) { m2.remove(p); if (m2.isEmpty()) routesShopToProcessor.remove(s); }
+    }
+
+    public void unbindAllForProcessor(Processor p) {
+        processorToFactories.remove(p);
+        routesFactoryToProcessor.remove(p);
+        routesProcessorToFactory.remove(p);
+        for (Shop shop : new ArrayList<>(shopToProcessors.keySet())) {
+            unbindProcessorFromShop(p, shop);
+        }
+    }
+
+    public void updateFactoryToProcessorRoute(Factory f, Processor p,
+                                              List<Point> toProcessor,
+                                              List<Point> toFactory) {
+        var m1 = routesFactoryToProcessor.get(p);
+        if (m1 != null) m1.put(f, new ArrayList<>(toProcessor));
+        var m2 = routesProcessorToFactory.get(p);
+        if (m2 != null) m2.put(f, new ArrayList<>(toFactory));
+    }
+
+    public void updateProcessorToShopRoute(Processor p, Shop s,
+                                           List<Point> toShop,
+                                           List<Point> toProcessor) {
+        var m1 = routesProcessorToShop.get(s);
+        if (m1 != null) m1.put(p, new ArrayList<>(toShop));
+        var m2 = routesShopToProcessor.get(s);
+        if (m2 != null) m2.put(p, new ArrayList<>(toProcessor));
+    }
+
+    /** Обратный поиск: к каким переработчикам привязана фабрика. */
+    public List<Processor> getProcessorsForFactory(Factory f) {
+        List<Processor> result = new ArrayList<>();
+        for (var e : processorToFactories.entrySet()) {
+            if (e.getValue().contains(f)) result.add(e.getKey());
+        }
+        return result;
     }
 }

@@ -97,7 +97,7 @@ public class GamePanel extends JPanel {
             public void mousePressed(MouseEvent e) {
                 requestFocusInWindow();
 
-                // === Двойной клик по фабрике → подсветка связей ===
+                // === Двойной клик по зданию → подсветка связей / выбор ===
                 if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() == 2) {
                     onDoubleClick(e);
                     return;
@@ -205,8 +205,9 @@ public class GamePanel extends JPanel {
 
     /**
      * Двойной клик по зданию:
-     *   - для фабрики → подсветка связей (как было);
-     *   - для магазина/дома/фабрики → выбор в панели "Мои объекты".
+     *   - для фабрики → подсветка связей + выбор в панели;
+     *   - для переработчика → выбор в панели;
+     *   - для магазина/дома → выбор в панели.
      */
     private void onDoubleClick(MouseEvent e) {
         int listIdx = routeOverlay.hitTestList(e.getX(), e.getY(), getWidth());
@@ -228,9 +229,14 @@ public class GamePanel extends JPanel {
             routeOverlay.toggle(f, game);
             shopPanel.selectBuilding(f);
         }
+        // Переработчик — снимаем оверлей фабрики, выбираем в панели
+        else if (b instanceof Processor p) {
+            routeOverlay.clear();
+            shopPanel.selectBuilding(p);
+        }
         // Магазин — выбираем в панели
         else if (b instanceof Shop s) {
-            routeOverlay.clear();  // снимаем оверлей фабрики, если был
+            routeOverlay.clear();
             shopPanel.selectBuilding(s);
         }
         // Дом — выбираем в панели
@@ -415,8 +421,6 @@ public class GamePanel extends JPanel {
         });
 
         // ===== D: нажали / отпустили =====
-        // Нажатие D включает режим сноса И запоминает, что клавиша зажата.
-        // Отпускание — сбрасывает флаг.
         im.put(KeyStroke.getKeyStroke(KeyEvent.VK_D, 0, false), "dPressed");
         am.put("dPressed", new AbstractAction() {
             @Override public void actionPerformed(ActionEvent e) {
@@ -651,8 +655,7 @@ public class GamePanel extends JPanel {
         Set<Building> drawn = java.util.Collections.newSetFromMap(
                 new java.util.IdentityHashMap<>());
         for (var b : game.getMap().getAll().values()) {
-            if (drawn.contains(b)
-                    || b instanceof Road) continue;
+            if (drawn.contains(b) || b instanceof Road) continue;
             drawn.add(b);
             if (b instanceof Factory f)
                 Renderer.drawFactory(g, f, camera);
@@ -660,6 +663,8 @@ public class GamePanel extends JPanel {
                 Renderer.drawShop(g, s, camera);
             else if (b instanceof House h)
                 Renderer.drawHouse(g, h, camera);
+            else if (b instanceof Processor p)          // ← NEW
+                Renderer.drawProcessor(g, p, camera);  // ← NEW
         }
 
         for (var c : game.getCars()) Renderer.drawCar(g, c, camera);

@@ -1,5 +1,6 @@
 package ru.student.fabricTown.buildings;
 
+import ru.student.fabricTown.agents.CargoSink;
 import ru.student.fabricTown.agents.Product;
 import ru.student.fabricTown.map.Point;
 
@@ -19,7 +20,7 @@ import java.util.*;
  *   - Склад магазина — общий на все типы товаров. Вместимость зависит
  *     от размера магазина.
  */
-public class Shop extends Building {
+public class Shop extends Building implements CargoSink {
 
     /** Вместимость склада (общая, все товары вместе). */
     private final int capacity;
@@ -133,4 +134,16 @@ public class Shop extends Building {
 
     @Override
     public String getTypeName() { return "Магазин"; }
+
+
+
+    @Override
+    public int freeSpace() {
+        return Math.max(0, capacity - totalStored());
+    }
+
+    @Override
+    public int acceptProducts(java.util.List<Product> products) {
+        return addProducts(products);   // addProducts уже есть и возвращает int
+    }
 }
