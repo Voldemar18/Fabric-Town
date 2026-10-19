@@ -5,7 +5,9 @@ public enum Product {
     BEEF("Говядина", 8),
     FRUIT("Фрукты", 3),
     VEGETABLES("Овощи", 2),
-    BREAD("Хлеб", 4);
+    BREAD("Хлеб", 4),
+    MILK("Молоко", 6),
+    COCOA("Какао", 7);
 
     public final String title;
     public final int price;
