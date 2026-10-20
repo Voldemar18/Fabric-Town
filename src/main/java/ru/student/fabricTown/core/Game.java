@@ -19,6 +19,7 @@ import ru.student.fabricTown.logic.RoadRegistry;
 import ru.student.fabricTown.map.Direction;
 import ru.student.fabricTown.map.GameMap;
 import ru.student.fabricTown.map.Point;
+import ru.student.fabricTown.profiler.Profiler;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -324,67 +325,84 @@ public class Game {
     // ================== ТИК СИМУЛЯЦИИ ==================
 
     public void tick(double dt) {
-        notifications.update(dt);
+        try (var s = Profiler.start("game.tick")) {
 
-        // --- Фабрики ---
-        for (Factory f : factories) {
-            f.tick(dt);
-            if (f.getStorageCount() >= f.getMaxStorage()) {
-                GameEvents.factoryFull(notifications, f);
+            try (var s2 = Profiler.start("game.tick.notifications")) {
+                notifications.update(dt);
             }
-        }
 
-        // --- Переработчики: производство ---
-        for (Processor p : processors) {
-            p.tick(dt);
-        }
-
-        // --- Все машины (один цикл) ---
-        for (UniversalCar c : cars) {
-            if (c.getState() == UniversalCar.State.IDLE) {
-                if (deliveryPaused) {
-                    // машина уже стоит, но tick всё равно нужен
-                } else if (!c.getSink().hasFreeSpace()) {
-                    // Получатель полон: магазину — уведомление,
-                    // переработчику — просто ждём без спама.
-                    if (c.getSink() instanceof Shop s) {
-                        GameEvents.shopFull(notifications, s);
+            // --- Фабрики ---
+            try (var s2 = Profiler.start("game.tick.factories")) {
+                for (Factory f : factories) {
+                    f.tick(dt);
+                    if (f.getStorageCount() >= f.getMaxStorage()) {
+                        GameEvents.factoryFull(notifications, f);
                     }
-                } else {
-                    c.tryStartDelivery();
                 }
             }
-            c.tick(dt);
-        }
 
-        // --- Люди ---
-        for (House h : houses) {
-            if (h.tickAndCheckExit(dt)) {
-                Product need = randomProduct();
-                Shop target = findNearestShopWithProduct(h, need);
-                if (target != null) {
-                    Person p = new Person(h, target, need);
-                    p.setShopFinder((n, visited) -> findAlternativeShop(h, n, visited));
-                    people.add(p);
-                } else {
-                    notifications.warn("Дом " + h.getOrigin()
-                            + " не нашёл ни одного магазина");
+            // --- Переработчики: производство ---
+            try (var s2 = Profiler.start("game.tick.processors")) {
+                for (Processor p : processors) {
+                    p.tick(dt);
                 }
             }
-        }
 
-        Iterator<Person> it = people.iterator();
-        while (it.hasNext()) {
-            Person p = it.next();
-            double earned = p.tick(dt);
-            if (earned > 0) money += earned;
-
-            if (p.isDone()) {
-                if (!p.hasBought()) {
-                    GameEvents.missingProduct(notifications,
-                            p.getTargetShop(), p.getNeed());
+            // --- Все машины (один цикл) ---
+            try (var s2 = Profiler.start("game.tick.cars")) {
+                for (UniversalCar c : cars) {
+                    if (c.getState() == UniversalCar.State.IDLE) {
+                        if (deliveryPaused) {
+                            // машина уже стоит, но tick всё равно нужен
+                        } else if (!c.getSink().hasFreeSpace()) {
+                            // Получатель полон: магазину — уведомление,
+                            // переработчику — просто ждём без спама.
+                            if (c.getSink() instanceof Shop s3) {
+                                GameEvents.shopFull(notifications, s3);
+                            }
+                        } else {
+                            Profiler.count("car.tryStartDelivery");
+                            c.tryStartDelivery();
+                        }
+                    }
+                    Profiler.count("car.tick");
+                    c.tick(dt);
                 }
-                it.remove();
+            }
+
+            // --- Люди ---
+            try (var s2 = Profiler.start("game.tick.houses")) {
+                for (House h : houses) {
+                    if (h.tickAndCheckExit(dt)) {
+                        Product need = randomProduct();
+                        Shop target = findNearestShopWithProduct(h, need);
+                        if (target != null) {
+                            Person p = new Person(h, target, need);
+                            p.setShopFinder((n, visited) -> findAlternativeShop(h, n, visited));
+                            people.add(p);
+                        } else {
+                            notifications.warn("Дом " + h.getOrigin()
+                                    + " не нашёл ни одного магазина");
+                        }
+                    }
+                }
+            }
+
+            try (var s2 = Profiler.start("game.tick.people")) {
+                Iterator<Person> it = people.iterator();
+                while (it.hasNext()) {
+                    Person p = it.next();
+                    double earned = p.tick(dt);
+                    if (earned > 0) money += earned;
+
+                    if (p.isDone()) {
+                        if (!p.hasBought()) {
+                            GameEvents.missingProduct(notifications,
+                                    p.getTargetShop(), p.getNeed());
+                        }
+                        it.remove();
+                    }
+                }
             }
         }
     }

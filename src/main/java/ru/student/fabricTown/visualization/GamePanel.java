@@ -7,6 +7,10 @@ import ru.student.fabricTown.logic.Blueprint;
 import ru.student.fabricTown.logic.PlacementRules;
 import ru.student.fabricTown.map.Direction;
 import ru.student.fabricTown.map.Point;
+import ru.student.fabricTown.profiler.Profiler;
+import ru.student.fabricTown.profiler.ProfilerOverlay;
+import ru.student.fabricTown.profiler.ProfilerSnapshot;
+import ru.student.fabricTown.profiler.ProfilerWindow;
 
 import javax.swing.*;
 import java.awt.*;
@@ -49,6 +53,16 @@ public class GamePanel extends JPanel {
     /** Зажата ли клавиша D (снос линией в любом режиме). */
     private boolean dKeyHeld = false;
 
+    // ==================== ПРОФАЙЛЕР ====================
+    /** Окно профайлера (F3). Может быть null / уже disposed. */
+    private ProfilerWindow profilerWindow;
+    /** Последний снимок для оверлея (обновляется раз в 10 кадров). */
+    private ProfilerSnapshot lastProfilerSnap;
+    /** Счётчик кадров — чтобы snapshot() вызывался не каждый кадр. */
+    private int profilerFrameCounter = 0;
+    /** dt прошлого кадра (для FPS в оверлее). */
+    private double lastDt = 1.0 / 60.0;
+
     // ==================== КОНСТРУКТОР ====================
     public GamePanel(Game game) {
         this.game = game;
@@ -76,6 +90,7 @@ public class GamePanel extends JPanel {
 
         // --- Игровой цикл ---
         this.loop = new GameLoop(game, dt -> {
+            lastDt = dt;                     // <-- для FPS в оверлее
             camera.update(dt);
             NotificationRenderer.tickAnimations(game.getNotifications(), dt);
             hud.refresh();
@@ -85,6 +100,9 @@ public class GamePanel extends JPanel {
 
         installMouseHandlers();
         installKeyHandlers();
+
+        // Инициализируем пустым снимком, чтобы оверлей не падал до первого snapshot().
+        this.lastProfilerSnap = Profiler.snapshot();
 
         SwingUtilities.invokeLater(this::requestFocusInWindow);
     }
@@ -440,6 +458,55 @@ public class GamePanel extends JPanel {
         am.put("rotateRoad", new AbstractAction() {
             @Override public void actionPerformed(ActionEvent e) { rotateRoad(); }
         });
+
+        // ===== F3: окно профайлера =====
+        im.put(KeyStroke.getKeyStroke("F3"), "toggleProfilerWindow");
+        am.put("toggleProfilerWindow", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) {
+                toggleProfilerWindow();
+            }
+        });
+
+        // ===== F4: вкл/выкл профайлер + сброс =====
+        im.put(KeyStroke.getKeyStroke("F4"), "toggleProfiling");
+        am.put("toggleProfiling", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) {
+                Profiler.setEnabled(!Profiler.isEnabled());
+                Profiler.reset();
+                lastProfilerSnap = Profiler.snapshot();
+                hud.setStatus(Profiler.isEnabled()
+                                ? "🔬 Профайлер ВКЛ"
+                                : "🔬 Профайлер ВЫКЛ",
+                        new Color(200, 240, 200));
+                repaint();
+            }
+        });
+    }
+
+    /**
+     * Открыть/поднять окно профайлера. Если окно уже есть — toFront().
+     * Если его закрыли (disposed) — создаём заново.
+     */
+    private void toggleProfilerWindow() {
+        if (profilerWindow == null || !profilerWindow.isDisplayable()) {
+            profilerWindow = new ProfilerWindow();
+            profilerWindow.setVisible(true);
+        } else {
+            profilerWindow.toFront();
+            profilerWindow.requestFocus();
+        }
+    }
+
+    /**
+     * Закрыть окно профайлера (если открыто).
+     * Вызывается извне (например, при закрытии GameFrame), чтобы
+     * дочернее окно не осталось висеть после dispose() родителя.
+     */
+    public void hideProfilerWindow() {
+        if (profilerWindow != null) {
+            profilerWindow.dispose();
+            profilerWindow = null;
+        }
     }
 
     /**
@@ -639,6 +706,7 @@ public class GamePanel extends JPanel {
     }
 
     // ==================== ОТРИСОВКА ====================
+
     @Override
     protected void paintComponent(Graphics g0) {
         super.paintComponent(g0);
@@ -646,54 +714,89 @@ public class GamePanel extends JPanel {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
 
-        Renderer.drawBackground(g, getWidth(), getHeight());
-        Renderer.drawGrid(g, game, camera, getWidth(), getHeight());
-        Renderer.drawMapBounds(g, game, camera);
+        try (var s = Profiler.start("render.total")) {
 
-        Renderer.drawRoads(g, game, camera);
-
-        Set<Building> drawn = java.util.Collections.newSetFromMap(
-                new java.util.IdentityHashMap<>());
-        for (var b : game.getMap().getAll().values()) {
-            if (drawn.contains(b) || b instanceof Road) continue;
-            drawn.add(b);
-            if (b instanceof Factory f)
-                Renderer.drawFactory(g, f, camera);
-            else if (b instanceof Shop s)
-                Renderer.drawShop(g, s, camera);
-            else if (b instanceof House h)
-                Renderer.drawHouse(g, h, camera);
-            else if (b instanceof Processor p)          // ← NEW
-                Renderer.drawProcessor(g, p, camera);  // ← NEW
-        }
-
-        for (var c : game.getCars()) Renderer.drawCar(g, c, camera);
-        for (var p : game.getPeople()) Renderer.drawPerson(g, p, camera);
-
-        if (mode == BuildMode.PLACE && selectedBlueprint != null && hoverCell != null) {
-            Renderer.drawGhost(g, selectedBlueprint, hoverCell, camera, hoverValid);
-
-            if (selectedBlueprint.kind == Blueprint.Kind.ROAD
-                    && selectedBlueprint.shape != null) {
-                Renderer.drawGhostRoad(g, selectedBlueprint.shape,
-                        hoverCell, camera, hoverValid);
+            try (var s2 = Profiler.start("render.bg")) {
+                Renderer.drawBackground(g, getWidth(), getHeight());
+                Renderer.drawGrid(g, game, camera, getWidth(), getHeight());
+                Renderer.drawMapBounds(g, game, camera);
             }
-        }
 
-        if (mode == BuildMode.DEMOLISH && hoverBuilding != null) {
-            Renderer.drawDemolishHighlight(g, hoverBuilding, camera);
-        }
-
-        if (mode == BuildMode.NONE && hoverCell != null) {
-            Building b = game.getMap().get(hoverCell);
-            if (b instanceof Road r && !r.isStraight() && !r.isCross()) {
-                Renderer.drawRotateHint(g, r, camera);
+            try (var s2 = Profiler.start("render.roads")) {
+                Renderer.drawRoads(g, game, camera);
             }
+
+            try (var s2 = Profiler.start("render.buildings")) {
+                Set<Building> drawn = java.util.Collections.newSetFromMap(
+                        new java.util.IdentityHashMap<>());
+                for (var b : game.getMap().getAll().values()) {
+                    if (drawn.contains(b) || b instanceof Road) continue;
+                    drawn.add(b);
+                    if (b instanceof Factory f)
+                        Renderer.drawFactory(g, f, camera);
+                    else if (b instanceof Shop sh)
+                        Renderer.drawShop(g, sh, camera);
+                    else if (b instanceof House h)
+                        Renderer.drawHouse(g, h, camera);
+                    else if (b instanceof Processor p)
+                        Renderer.drawProcessor(g, p, camera);
+                }
+            }
+
+            try (var s2 = Profiler.start("render.cars")) {
+                for (var c : game.getCars()) {
+                    // Profiler.count("render.car.draw");
+                    // ↑ Раскомментируй, если нужен счётчик каждой машины.
+                    // На 30k машин это 1.8M вызовов/сек — заметный оверхед.
+                    // Общий таймер render.cars уже даёт картину.
+                    Renderer.drawCar(g, c, camera);
+                }
+            }
+
+            try (var s2 = Profiler.start("render.people")) {
+                for (var p : game.getPeople()) Renderer.drawPerson(g, p, camera);
+            }
+
+            try (var s2 = Profiler.start("render.ghost")) {
+                if (mode == BuildMode.PLACE && selectedBlueprint != null && hoverCell != null) {
+                    Renderer.drawGhost(g, selectedBlueprint, hoverCell, camera, hoverValid);
+
+                    if (selectedBlueprint.kind == Blueprint.Kind.ROAD
+                            && selectedBlueprint.shape != null) {
+                        Renderer.drawGhostRoad(g, selectedBlueprint.shape,
+                                hoverCell, camera, hoverValid);
+                    }
+                }
+                if (mode == BuildMode.DEMOLISH && hoverBuilding != null) {
+                    Renderer.drawDemolishHighlight(g, hoverBuilding, camera);
+                }
+                if (mode == BuildMode.NONE && hoverCell != null) {
+                    Building b = game.getMap().get(hoverCell);
+                    if (b instanceof Road r && !r.isStraight() && !r.isCross()) {
+                        Renderer.drawRotateHint(g, r, camera);
+                    }
+                }
+            }
+
+            try (var s2 = Profiler.start("render.overlay")) {
+                routeOverlay.draw(g, game, camera, getWidth(), getHeight());
+            }
+
+            try (var s2 = Profiler.start("render.hud")) {
+                Renderer.drawHelp(g, getWidth(), getHeight(), hoverCell);
+                NotificationRenderer.draw(g, game.getNotifications(), getWidth());
+            }
+
+            // Профайлер-оверлей — ВНЕ render.total, иначе он сам себя меряет
         }
 
-        routeOverlay.draw(g, game, camera, getWidth(), getHeight());
-
-        Renderer.drawHelp(g, getWidth(), getHeight(), hoverCell);
-        NotificationRenderer.draw(g, game.getNotifications(), getWidth());
+        // --- Мини-оверлей профайлера (если включён) ---
+        if (Profiler.isEnabled() && lastProfilerSnap != null) {
+            if (++profilerFrameCounter % 10 == 0) {
+                lastProfilerSnap = Profiler.snapshot();
+            }
+            double fps = lastDt > 0 ? 1.0 / lastDt : 0;
+            ProfilerOverlay.draw(g, lastProfilerSnap, fps, getWidth(), getHeight());
+        }
     }
 }

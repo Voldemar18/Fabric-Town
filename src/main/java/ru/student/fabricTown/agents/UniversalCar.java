@@ -2,6 +2,7 @@ package ru.student.fabricTown.agents;
 
 import ru.student.fabricTown.logic.RoadRegistry;
 import ru.student.fabricTown.map.Point;
+import ru.student.fabricTown.profiler.Profiler;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -137,6 +138,7 @@ public class UniversalCar {
     // ==================== ТИК ====================
 
     public void tick(double dt) {
+        Profiler.count("car.tick");
         switch (state) {
             case BLOCKED -> {
                 if (sink.hasFreeSpace()) state = State.IDLE;
@@ -256,6 +258,7 @@ public class UniversalCar {
      *  6) едем.
      */
     public boolean tryStartDelivery() {
+        Profiler.count("car.tryStartDelivery");
         if (!deliveryEnabled) return false;
         if (state != State.IDLE) return false;
 

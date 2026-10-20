@@ -1,6 +1,7 @@
 package ru.student.fabricTown.logic;
 
 import ru.student.fabricTown.map.Point;
+import ru.student.fabricTown.profiler.Profiler;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -19,14 +20,17 @@ public final class RoadRegistry {
     private RoadRegistry() {}
 
     public static synchronized void occupy(Point p) {
+        Profiler.count("road.occupy");
         if (p != null) occupied.add(p);
     }
 
     public static synchronized void release(Point p) {
+        Profiler.count("road.release");
         if (p != null) occupied.remove(p);
     }
 
     public static synchronized boolean isBlocked(Point p) {
+        Profiler.count("road.isBlocked");
         return occupied.contains(p);
     }
 
