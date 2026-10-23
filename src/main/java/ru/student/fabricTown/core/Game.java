@@ -116,8 +116,8 @@ public class Game {
         initRoadGrid();
         graphBuilder.rebuild();
         initBuildings();
-//        autoBindAllFactories();
-//        autoBindAllProcessors();
+        autoBindAllFactories();
+        autoBindAllProcessors();
 
         notifications.success("Город основан: "
                 + factories.size() + " фабрик, "
