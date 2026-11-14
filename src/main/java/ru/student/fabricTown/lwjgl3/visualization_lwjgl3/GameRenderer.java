@@ -16,6 +16,7 @@ import ru.student.fabricTown.logic.Blueprint;
 import ru.student.fabricTown.logic.RoadRegistry;
 import ru.student.fabricTown.map.Direction;
 import ru.student.fabricTown.map.Point;
+import ru.student.fabricTown.profiler.Profiler;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -72,33 +73,35 @@ public class GameRenderer {
 
         Draw.enableBlend();
         shapes.begin(ShapeRenderer.ShapeType.Filled);
-        shapes.setColor(BG);
-        float wx0 = (float) cam.screenToWorldX(0);
-        float wy0 = (float) cam.screenToWorldY(0);
-        float wx1 = (float) cam.screenToWorldX(w);
-        float wy1 = (float) cam.screenToWorldY(h);
-        shapes.rect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+        try (var s = Profiler.start("world.bg")) {
+            shapes.setColor(BG);
+            float wx0 = (float) cam.screenToWorldX(0);
+            float wy0 = (float) cam.screenToWorldY(0);
+            float wx1 = (float) cam.screenToWorldX(w);
+            float wy1 = (float) cam.screenToWorldY(h);
+            shapes.rect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+        }
 
-        drawRoadsFilled(game);
-        drawBuildingsFilled(game);
-        drawCarsFilled(game);
-        drawPeopleFilled(game);
-        drawGhostFilled(mode, selected, hoverCell, hoverValid);
-        drawDemolishFilled(mode, hoverBuilding);
+        try (var s = Profiler.start("world.roads"))         { drawRoadsFilled(game); }
+        try (var s = Profiler.start("world.buildings"))     { drawBuildingsFilled(game); }
+        try (var s = Profiler.start("world.cars"))          { drawCarsFilled(game); }
+        try (var s = Profiler.start("world.people"))        { drawPeopleFilled(game); }
+        try (var s = Profiler.start("world.ghost"))         { drawGhostFilled(mode, selected, hoverCell, hoverValid); }
+        try (var s = Profiler.start("world.demolish"))      { drawDemolishFilled(mode, hoverBuilding); }
         shapes.end();
 
         float cell = cam.pxPerCell();
         Gdx.gl.glLineWidth(Math.max(1f, Math.min(4f, cell / 16f)));
 
         shapes.begin(ShapeRenderer.ShapeType.Line);
-        drawGrid(game, cam, w, h);
-        drawMapBounds(game);
-        drawRoadArrows(game, cam);
-        drawBuildingEdges(game);
-        drawCarEdges(game, cam);
-        drawGhostEdges(mode, selected, hoverCell, hoverValid, cam);
-        drawDemolishEdges(mode, hoverBuilding);
-        drawRotateHint(mode, hoverBuilding, cam);
+        try (var s = Profiler.start("world.grid"))          { drawGrid(game, cam, w, h); }
+        try (var s = Profiler.start("world.bounds"))        { drawMapBounds(game); }
+        try (var s = Profiler.start("world.arrows"))        { drawRoadArrows(game, cam); }
+        try (var s = Profiler.start("world.edges"))         { drawBuildingEdges(game); }
+        try (var s = Profiler.start("world.carEdges"))      { drawCarEdges(game, cam); }
+        try (var s = Profiler.start("world.ghostEdges"))    { drawGhostEdges(mode, selected, hoverCell, hoverValid, cam); }
+        try (var s = Profiler.start("world.demolishEdges")) { drawDemolishEdges(mode, hoverBuilding); }
+        try (var s = Profiler.start("world.rotHint"))       { drawRotateHint(mode, hoverBuilding, cam); }
         shapes.end();
 
         Gdx.gl.glLineWidth(1f);
@@ -112,108 +115,120 @@ public class GameRenderer {
         float zoom = cam.pxPerCell();
         float screenH = Gdx.graphics.getHeight();
 
-        Set<Building> drawn = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (Building b : game.getMap().getAll().values()) {
-            if (b instanceof Road || !drawn.add(b)) continue;
-            if (zoom < 14) {
-                if (b instanceof Shop s && s.isEmpty() && zoom >= 12) {
-                    drawShopBang(batch, big, s, cam, screenH);
+        try (var s = Profiler.start("labels.buildings")) {
+            Set<Building> drawn = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Building b : game.getMap().getAll().values()) {
+                if (b instanceof Road || !drawn.add(b)) continue;
+                Profiler.count("labels.buildings.count");
+                if (zoom < 14) {
+                    if (b instanceof Shop s2 && s2.isEmpty() && zoom >= 12) {
+                        drawShopBang(batch, big, s2, cam, screenH);
+                    }
+                    continue;
                 }
-                continue;
+                if (b instanceof Factory f) drawFactoryLabels(batch, tiny, label, f, cam, screenH, zoom);
+                else if (b instanceof Shop s2) drawShopLabels(batch, tiny, label, big, s2, cam, screenH, zoom);
+                else if (b instanceof House h) drawHouseLabels(batch, tiny, label, h, cam, screenH);
+                else if (b instanceof Processor p) drawProcessorLabels(batch, tiny, label, p, cam, screenH, zoom);
             }
-            if (b instanceof Factory f) drawFactoryLabels(batch, tiny, label, f, cam, screenH, zoom);
-            else if (b instanceof Shop s) drawShopLabels(batch, tiny, label, big, s, cam, screenH, zoom);
-            else if (b instanceof House h) drawHouseLabels(batch, tiny, label, h, cam, screenH);
-            else if (b instanceof Processor p) drawProcessorLabels(batch, tiny, label, p, cam, screenH, zoom);
         }
 
         if (zoom >= 16) {
-            tiny.setColor(Color.WHITE);
-            for (UniversalCar c : game.getCars()) {
-                int count = c.getCargoCount();
-                if (count <= 0) continue;
-                float sx = cam.worldToScreenX(c.getX());
-                float sy = screenH - cam.worldToScreenY(c.getY());
-                float size = Math.max(4, zoom * 0.5f);
-                tiny.draw(batch, String.valueOf(count), sx + size / 2f + 2, sy);
-                if (zoom >= 24) {
-                    Product first = c.getCarrying();
-                    if (first != null) {
-                        tiny.setColor(1f, 1f, 1f, 0.7f);
-                        tiny.draw(batch, first.title, sx - 20, sy + size);
-                        tiny.setColor(Color.WHITE);
+            try (var s = Profiler.start("labels.cars")) {
+                tiny.setColor(Color.WHITE);
+                for (UniversalCar c : game.getCars()) {
+                    int count = c.getCargoCount();
+                    if (count <= 0) continue;
+                    Profiler.count("labels.cars.count");
+                    float sx = cam.worldToScreenX(c.getX());
+                    float sy = screenH - cam.worldToScreenY(c.getY());
+                    float size = Math.max(4, zoom * 0.5f);
+                    tiny.draw(batch, String.valueOf(count), sx + size / 2f + 2, sy);
+                    if (zoom >= 24) {
+                        Product first = c.getCarrying();
+                        if (first != null) {
+                            tiny.setColor(1f, 1f, 1f, 0.7f);
+                            tiny.draw(batch, first.title, sx - 20, sy + size);
+                            tiny.setColor(Color.WHITE);
+                        }
                     }
                 }
             }
         }
 
         if (mode == BuildMode.PLACE && selected != null && hoverCell != null && zoom >= 16) {
-            float x = cam.worldToScreenX(hoverCell.x) + 4;
-            float y = screenH - cam.worldToScreenY(hoverCell.y) - 4;
-            String text = switch (selected.kind) {
-                case ROAD -> "Дорога";
-                case FACTORY -> "Фабрика";
-                case PROCESSOR -> "Переработчик";
-                case SHOP -> "Магазин";
-                case HOUSE -> "Дом";
-                case LAND -> "Земля";
-            };
-            label.setColor(Color.WHITE);
-            label.draw(batch, text, x, y);
+            try (var s = Profiler.start("labels.ghost")) {
+                float x = cam.worldToScreenX(hoverCell.x) + 4;
+                float y = screenH - cam.worldToScreenY(hoverCell.y) - 4;
+                String text = switch (selected.kind) {
+                    case ROAD -> "Дорога";
+                    case FACTORY -> "Фабрика";
+                    case PROCESSOR -> "Переработчик";
+                    case SHOP -> "Магазин";
+                    case HOUSE -> "Дом";
+                    case LAND -> "Земля";
+                };
+                label.setColor(Color.WHITE);
+                label.draw(batch, text, x, y);
+            }
         }
 
         if (mode == BuildMode.NONE && hoverBuilding instanceof Road r
                 && !r.isStraight() && !r.isCross() && zoom >= 20) {
-            float x = cam.worldToScreenX(r.getOrigin().x) + zoom / 2f - 4;
-            float y = screenH - cam.worldToScreenY(r.getOrigin().y) + 12;
-            tiny.setColor(0.86f, 0.94f, 1f, 0.86f);
-            tiny.draw(batch, "R", x, y);
+            try (var s = Profiler.start("labels.rotHint")) {
+                float x = cam.worldToScreenX(r.getOrigin().x) + zoom / 2f - 4;
+                float y = screenH - cam.worldToScreenY(r.getOrigin().y) + 12;
+                tiny.setColor(0.86f, 0.94f, 1f, 0.86f);
+                tiny.draw(batch, "R", x, y);
+            }
         }
     }
 
     public void drawHelp(SpriteBatch batch, BitmapFont small, BitmapFont labelFont,
                          Point hoverCell, com.badlogic.gdx.graphics.Texture pixel) {
-        float w = Gdx.graphics.getWidth();
-        float h = Gdx.graphics.getHeight();
-        float right = w - 20;
-        float bottom = 20;
+        try (var s = Profiler.start("labels.help")) {
+            float w = Gdx.graphics.getWidth();
+            float h = Gdx.graphics.getHeight();
+            float right = w - 20;
+            float bottom = 20;
 
-        if (hoverCell != null) {
-            String coord = "(" + hoverCell.x + ", " + hoverCell.y + ")";
-            glyph.setText(labelFont, coord);
-            float padX = 8, padY = 4;
-            float boxW = glyph.width + padX * 2;
-            float boxH = glyph.height + padY * 2 + 6;
-            float boxX = right - boxW;
-            float boxY = bottom;
-            batch.setColor(20 / 255f, 20 / 255f, 30 / 255f, 0.78f);
-            batch.draw(pixel, boxX, boxY, boxW, boxH);
-            batch.setColor(255 / 255f, 220 / 255f, 100 / 255f, 1f);
-            batch.draw(pixel, boxX, boxY, boxW, 1.5f);
-            batch.draw(pixel, boxX, boxY + boxH - 1.5f, boxW, 1.5f);
-            batch.draw(pixel, boxX, boxY, 1.5f, boxH);
-            batch.draw(pixel, boxX + boxW - 1.5f, boxY, 1.5f, boxH);
-            labelFont.setColor(255 / 255f, 235 / 255f, 130 / 255f, 1f);
-            labelFont.draw(batch, coord, boxX + padX, boxY + padY + glyph.height);
-            bottom = boxY + boxH + 8;
-            batch.setColor(Color.WHITE);
-        }
+            if (hoverCell != null) {
+                String coord = "(" + hoverCell.x + ", " + hoverCell.y + ")";
+                glyph.setText(labelFont, coord);
+                float padX = 8, padY = 4;
+                float boxW = glyph.width + padX * 2;
+                float boxH = glyph.height + padY * 2 + 6;
+                float boxX = right - boxW;
+                float boxY = bottom;
+                batch.setColor(20 / 255f, 20 / 255f, 30 / 255f, 0.78f);
+                batch.draw(pixel, boxX, boxY, boxW, boxH);
+                batch.setColor(255 / 255f, 220 / 255f, 100 / 255f, 1f);
+                batch.draw(pixel, boxX, boxY, boxW, 1.5f);
+                batch.draw(pixel, boxX, boxY + boxH - 1.5f, boxW, 1.5f);
+                batch.draw(pixel, boxX, boxY, 1.5f, boxH);
+                batch.draw(pixel, boxX + boxW - 1.5f, boxY, 1.5f, boxH);
+                labelFont.setColor(255 / 255f, 235 / 255f, 130 / 255f, 1f);
+                labelFont.draw(batch, coord, boxX + padX, boxY + padY + glyph.height);
+                bottom = boxY + boxH + 8;
+                batch.setColor(Color.WHITE);
+            }
 
-        small.setColor(180 / 255f, 180 / 255f, 180 / 255f, 0.86f);
-        String[] lines = {
-                "ПКМ/СКМ — тащить карту",
-                "Колесо — зум",
-                "ЛКМ — разместить / снести",
-                "Esc — отмена, D — снос"
-        };
-        float y = bottom + 14 * (lines.length - 1);
-        for (String line : lines) {
-            glyph.setText(small, line);
-            small.draw(batch, line, right - glyph.width, y);
-            y -= 14;
+            small.setColor(180 / 255f, 180 / 255f, 180 / 255f, 0.86f);
+            String[] lines = {
+                    "ПКМ/СКМ — тащить карту",
+                    "Колесо — зум",
+                    "ЛКМ — разместить / снести",
+                    "Esc — отмена, D — снос"
+            };
+            float y = bottom + 14 * (lines.length - 1);
+            for (String line : lines) {
+                glyph.setText(small, line);
+                small.draw(batch, line, right - glyph.width, y);
+                y -= 14;
+            }
+            small.setColor(Color.WHITE);
+            labelFont.setColor(Color.WHITE);
         }
-        small.setColor(Color.WHITE);
-        labelFont.setColor(Color.WHITE);
     }
 
     public ShapeRenderer getShapes() { return shapes; }
@@ -248,6 +263,7 @@ public class GameRenderer {
 
     private void drawRoadsFilled(Game game) {
         for (Road r : game.getMap().getRoads().values()) {
+            Profiler.count("world.roads.count");
             Point p = r.getOrigin();
             shapes.setColor(RoadRegistry.isBlocked(p) ? ROAD_BUSY : ROAD_FILL);
             shapes.rect(p.x, p.y, 1f, 1f);
@@ -279,6 +295,7 @@ public class GameRenderer {
             if (b instanceof Road || !drawn.add(b)) continue;
             Color fill = buildingFill(b);
             if (fill == null) continue;
+            Profiler.count("world.buildings.count");
             shapes.setColor(fill);
             float x = b.getOrigin().x + 0.06f;
             float y = b.getOrigin().y + 0.06f;
@@ -318,6 +335,7 @@ public class GameRenderer {
 
     private void drawCarsFilled(Game game) {
         for (UniversalCar c : game.getCars()) {
+            Profiler.count("world.cars.count");
             float size = 0.5f;
             shapes.setColor(0, 0, 0, 0.3f);
             shapes.circle((float) c.getX() + 0.03f, (float) c.getY() + 0.06f, size / 2f, 12);
@@ -336,6 +354,7 @@ public class GameRenderer {
     private void drawPeopleFilled(Game game) {
         shapes.setColor(PERSON_FILL);
         for (Person p : game.getPeople()) {
+            Profiler.count("world.people.count");
             shapes.setColor(0, 0, 0, 0.24f);
             shapes.circle((float) p.getX() + 0.02f, (float) p.getY() + 0.04f, 0.175f, 10);
             shapes.setColor(PERSON_FILL);
@@ -347,7 +366,6 @@ public class GameRenderer {
         if (mode != BuildMode.PLACE || bp == null || cell == null) return;
         shapes.setColor(valid ? GHOST_OK : GHOST_BAD);
         shapes.rect(cell.x, cell.y, bp.size.w, bp.size.h);
-        if (mode == BuildMode.DEMOLISH) return;
     }
 
     private void drawGhostEdges(BuildMode mode, Blueprint bp, Point cell, boolean valid,

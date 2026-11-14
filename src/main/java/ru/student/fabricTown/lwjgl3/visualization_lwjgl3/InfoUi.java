@@ -15,6 +15,7 @@ import ru.student.fabricTown.buildings.House;
 import ru.student.fabricTown.buildings.Processor;
 import ru.student.fabricTown.buildings.Shop;
 import ru.student.fabricTown.core.Game;
+import ru.student.fabricTown.profiler.Profiler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,9 +34,7 @@ public class InfoUi {
     private final TextButton autoBindButton;
     private final TextButton sellButton;
 
-    /** Список «Мои объекты» — колесо мыши крутит именно его, когда курсор над панелью. */
     private ScrollPane listScrollPane;
-    /** Список связей. */
     private ScrollPane bindScrollPane;
 
     private Building selected;
@@ -59,7 +58,7 @@ public class InfoUi {
         listScrollPane = new ScrollPane(listTable, skin);
         listScrollPane.setFadeScrollBars(false);
         listScrollPane.setScrollingDisabled(true, false);
-        root.add(listScrollPane).growX().height(180).row();
+        root.add(listScrollPane).growX().height(300).row();
 
         infoLabel = new Label(filter("<i>Ничего не выбрано</i>"), skin);
         infoLabel.setWrap(true);
@@ -94,112 +93,116 @@ public class InfoUi {
         refresh();
     }
 
-    /** Основной скролл-список — нужен UiStage. */
     public ScrollPane getScrollPane() { return listScrollPane; }
-
-    /** Скролл-список связей — если понадобится крутить отдельно. */
     public ScrollPane getBindingsScrollPane() { return bindScrollPane; }
-
     public Building getSelected() { return selected; }
 
     public void act(float dt) {
         refreshAcc += dt;
         if (refreshAcc >= 0.5f) {
             refreshAcc = 0;
-            refresh();
+            try (var s = Profiler.start("infoUi.refresh")) { refresh(); }
         }
     }
 
     public void selectBuilding(Building building) {
         selected = building;
-        refresh();
-        updateInfo();
+        try (var s = Profiler.start("infoUi.selectBuilding")) {
+            refresh();
+            updateInfo();
+        }
     }
 
     public void refresh() {
-        Building prev = selected;
-        listTable.clearChildren();
-        List<Building> all = new ArrayList<>();
-        all.addAll(game.getFactories());
-        all.addAll(game.getShops());
-        all.addAll(game.getProcessors());
-        all.addAll(game.getHouses());
+        try (var s = Profiler.start("infoUi.refresh.inner")) {
+            Building prev = selected;
+            listTable.clearChildren();
+            List<Building> all = new ArrayList<>();
+            all.addAll(game.getFactories());
+            all.addAll(game.getShops());
+            all.addAll(game.getProcessors());
+            all.addAll(game.getHouses());
 
-        boolean found = false;
-        for (Building b : all) {
-            TextButton row = new TextButton(filter(iconFor(b) + " " + b.getTypeName() + " " + b.getOrigin()), skin);
-            row.getLabel().setAlignment(Align.left);
-            if (b == prev) {
-                row.setChecked(true);
-                found = true;
-            }
-            row.addListener(new ChangeListener() {
-                @Override public void changed(ChangeEvent event, com.badlogic.gdx.scenes.scene2d.Actor a) {
-                    selected = b;
-                    updateInfo();
-                    refresh();
+            boolean found = false;
+            for (Building b : all) {
+                TextButton row = new TextButton(filter(iconFor(b) + " " + b.getTypeName() + " " + b.getOrigin()), skin);
+                row.getLabel().setAlignment(Align.left);
+                if (b == prev) {
+                    row.setChecked(true);
+                    found = true;
                 }
-            });
-            listTable.add(row).growX().height(24).padBottom(2).row();
-        }
-        if (prev != null && !found) {
-            selected = null;
-            updateInfo();
-        } else if (selected != null) {
-            updateInfo();
+                row.addListener(new ChangeListener() {
+                    @Override public void changed(ChangeEvent event, com.badlogic.gdx.scenes.scene2d.Actor a) {
+                        selected = b;
+                        updateInfo();
+                        refresh();
+                    }
+                });
+                listTable.add(row).growX().height(24).padBottom(2).row();
+            }
+            if (prev != null && !found) {
+                selected = null;
+                updateInfo();
+            } else if (selected != null) {
+                updateInfo();
+            }
         }
     }
 
     private void updateInfo() {
-        rebuildBindings();
-        if (selected == null) {
-            infoLabel.setText(filter("Ничего не выбрано"));
-            sellButton.setDisabled(true);
-            sellButton.setText(filter("💰 Продать"));
-            autoBindButton.setVisible(false);
-            return;
-        }
+        try (var prof = Profiler.start("infoUi.updateInfo.inner")) {
+            rebuildBindings();
+            if (selected == null) {
+                infoLabel.setText(filter("Ничего не выбрано"));
+                sellButton.setDisabled(true);
+                sellButton.setText(filter("💰 Продать"));
+                autoBindButton.setVisible(false);
+                return;
+            }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append(selected.getTypeName()).append('\n');
-        sb.append("Позиция: ").append(selected.getOrigin()).append('\n');
-        if (selected instanceof Factory f) {
-            sb.append("Склад: ").append(f.getStorageCount()).append('/').append(f.getMaxStorage()).append('\n');
-            int boundShops = game.getDispatcher().getFactoriesForShopCount(f);
-            sb.append("Магазинов: ").append(boundShops).append('/').append(f.getMaxShops()).append('\n');
-            sb.append("Переработчиков: ").append(game.getDispatcher().getProcessorsForFactory(f).size()).append('\n');
-            sb.append("Вместимость машины: ").append(f.getCarryCapacity()).append(" шт.");
-        } else if (selected instanceof Shop s) {
-            sb.append("Товаров: ").append(s.totalStored()).append('/').append(s.getCapacity()).append('\n');
-            int bound = game.getDispatcher().getFactoriesFor(s).size();
-            int maxTotal = s.getMaxFactoriesPerType() * Product.values().length;
-            sb.append("Фабрик: ").append(bound).append('/').append(maxTotal)
-                    .append(" (лимит по типу: ").append(s.getMaxFactoriesPerType()).append(")\n");
-            sb.append("Переработчиков: ").append(game.getDispatcher().getProcessorsForShop(s).size()).append('\n');
-            sb.append("Продано на: ").append((int) s.getMoneyEarned());
-        } else if (selected instanceof Processor p) {
-            sb.append("Рецепт: ");
-            p.getRecipe().inputs.forEach((prod, qty) -> sb.append(prod.title).append('×').append(qty).append(' '));
-            sb.append("→ ").append(p.getOutputProduct().title).append('\n');
-            sb.append("Ингредиентов: ").append(p.totalInputStored()).append('/').append(p.getInputCapacity()).append('\n');
-            sb.append("Готово: ").append(p.getOutputCount()).append('/').append(p.getOutputCapacity()).append('\n');
-            sb.append("Фабрик: ").append(game.getDispatcher().getFactoriesForProcessor(p).size()).append('\n');
-            sb.append("Магазинов: ").append(game.getDispatcher().getShopsForProcessor(p).size())
-                    .append('/').append(p.getMaxShops());
-        } else if (selected instanceof House h) {
-            sb.append("Жителей: ").append(h.getResidents());
+            StringBuilder sb = new StringBuilder();
+            sb.append(selected.getTypeName()).append('\n');
+            sb.append("Позиция: ").append(selected.getOrigin()).append('\n');
+            if (selected instanceof Factory f) {
+                sb.append("Склад: ").append(f.getStorageCount()).append('/').append(f.getMaxStorage()).append('\n');
+                int boundShops = game.getDispatcher().getFactoriesForShopCount(f);
+                sb.append("Магазинов: ").append(boundShops).append('/').append(f.getMaxShops()).append('\n');
+                sb.append("Переработчиков: ").append(game.getDispatcher().getProcessorsForFactory(f).size()).append('\n');
+                sb.append("Вместимость машины: ").append(f.getCarryCapacity()).append(" шт.");
+            } else if (selected instanceof Shop s) {
+                sb.append("Товаров: ").append(s.totalStored()).append('/').append(s.getCapacity()).append('\n');
+                int bound = game.getDispatcher().getFactoriesFor(s).size();
+                int maxTotal = s.getMaxFactoriesPerType() * Product.values().length;
+                sb.append("Фабрик: ").append(bound).append('/').append(maxTotal)
+                        .append(" (лимит по типу: ").append(s.getMaxFactoriesPerType()).append(")\n");
+                sb.append("Переработчиков: ").append(game.getDispatcher().getProcessorsForShop(s).size()).append('\n');
+                sb.append("Продано на: ").append((int) s.getMoneyEarned());
+            } else if (selected instanceof Processor p) {
+                sb.append("Рецепт: ");
+                p.getRecipe().inputs.forEach((prod, qty) -> sb.append(prod.title).append('×').append(qty).append(' '));
+                sb.append("→ ").append(p.getOutputProduct().title).append('\n');
+                sb.append("Ингредиентов: ").append(p.totalInputStored()).append('/').append(p.getInputCapacity()).append('\n');
+                sb.append("Готово: ").append(p.getOutputCount()).append('/').append(p.getOutputCapacity()).append('\n');
+                sb.append("Фабрик: ").append(game.getDispatcher().getFactoriesForProcessor(p).size()).append('\n');
+                sb.append("Магазинов: ").append(game.getDispatcher().getShopsForProcessor(p).size())
+                        .append('/').append(p.getMaxShops());
+            } else if (selected instanceof House h) {
+                sb.append("Жителей: ").append(h.getResidents());
+            }
+            infoLabel.setText(filter(sb.toString()));
+            sellButton.setText(filter("💰 Продать за " + (int) selected.getSellPrice()));
+            sellButton.setDisabled(false);
         }
-        infoLabel.setText(filter(sb.toString()));
-        sellButton.setText(filter("💰 Продать за " + (int) selected.getSellPrice()));
-        sellButton.setDisabled(false);
     }
 
     private void rebuildBindings() {
-        bindingsTable.clearChildren();
-        autoBindButton.setVisible(false);
-        if (selected instanceof Shop shop) buildShopBindings(shop);
-        else if (selected instanceof Factory factory) buildFactoryBindings(factory);
-        else if (selected instanceof Processor processor) buildProcessorBindings(processor);
+        try (var s = Profiler.start("infoUi.rebuildBindings.inner")) {
+            bindingsTable.clearChildren();
+            autoBindButton.setVisible(false);
+            if (selected instanceof Shop shop) buildShopBindings(shop);
+            else if (selected instanceof Factory factory) buildFactoryBindings(factory);
+            else if (selected instanceof Processor processor) buildProcessorBindings(processor);
+        }
     }
 
     private void buildShopBindings(Shop shop) {
@@ -398,12 +401,14 @@ public class InfoUi {
 
     private void onSell() {
         if (selected == null) return;
-        String err = game.trySell(selected.getOrigin());
-        if (err != null) showError(err);
-        else {
-            selected = null;
-            refresh();
-            updateInfo();
+        try (var s = Profiler.start("infoUi.onSell")) {
+            String err = game.trySell(selected.getOrigin());
+            if (err != null) showError(err);
+            else {
+                selected = null;
+                refresh();
+                updateInfo();
+            }
         }
     }
 

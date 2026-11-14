@@ -28,6 +28,7 @@ public class UiController extends InputAdapter {
     private BuildUi buildUi;
     private HudRenderer hud;
     private RouteOverlay overlay;
+    private UiStage uiStage;
 
     public BuildMode mode = BuildMode.NONE;
     public Blueprint selectedBlueprint = null;
@@ -53,11 +54,8 @@ public class UiController extends InputAdapter {
     public void setInfoUi(InfoUi i) { infoUi = i; }
     public void setBuildUi(BuildUi b) { buildUi = b; }
     public void setHud(HudRenderer h) { hud = h; }
+    public void setUiStage(UiStage s) { uiStage = s; }
 
-    /**
-     * Единая точка для зума колёсиком.
-     * Вызывается из UiStage (см. capture-listener), когда курсор над картой.
-     */
     public boolean onScrolled(float amountY) {
         if (amountY == 0f) return false;
         cam.zoomWheel(amountY);
@@ -66,6 +64,13 @@ public class UiController extends InputAdapter {
 
     @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
+        // Страховка: клик дошёл до UiController — значит Stage его не поглотил,
+        // то есть клик был не по UI. Сбрасываем scrollFocus, чтобы следующий
+        // скролл не ушёл в последний кликнутый ScrollPane.
+        if (uiStage != null && uiStage.stage != null) {
+            uiStage.stage.setScrollFocus(null);
+        }
+
         if (button != Input.Buttons.LEFT) return false;
         updateHover(screenX, screenY);
 
@@ -102,7 +107,9 @@ public class UiController extends InputAdapter {
         if (cam.isDragging()) return false;
         updateHover(screenX, screenY);
         if (painting && hoverCell != null && !hoverCell.equals(lastPaintedCell)) {
-            paintLine(lastPaintedCell, hoverCell);
+            try (var s = Profiler.start("ui.paintLine")) {
+                paintLine(lastPaintedCell, hoverCell);
+            }
             lastPaintedCell = hoverCell;
         }
         return false;
@@ -110,7 +117,9 @@ public class UiController extends InputAdapter {
 
     @Override
     public boolean mouseMoved(int screenX, int screenY) {
-        updateHover(screenX, screenY);
+        try (var s = Profiler.start("ui.mouseMoved")) {
+            updateHover(screenX, screenY);
+        }
         return false;
     }
 
@@ -159,14 +168,20 @@ public class UiController extends InputAdapter {
     }
 
     public void update() {
-        updateHover(Gdx.input.getX(), Gdx.input.getY());
+        try (var s = Profiler.start("ui.updateHover")) {
+            updateHover(Gdx.input.getX(), Gdx.input.getY());
+        }
     }
 
     private void updateHover(int screenX, int screenY) {
         hoverCell = cam.cellUnder(screenX, screenY);
-        hoverBuilding = game.getMap().get(hoverCell);
+        try (var s = Profiler.start("ui.hover.map.get")) {
+            hoverBuilding = game.getMap().get(hoverCell);
+        }
         if (mode == BuildMode.PLACE && selectedBlueprint != null) {
-            hoverValid = PlacementRules.check(selectedBlueprint, hoverCell, game.getMap()) == null;
+            try (var s = Profiler.start("ui.hover.placement")) {
+                hoverValid = PlacementRules.check(selectedBlueprint, hoverCell, game.getMap()) == null;
+            }
         } else {
             hoverValid = false;
         }
@@ -175,28 +190,30 @@ public class UiController extends InputAdapter {
 
     private void handleDoubleClick(int screenX, int screenY) {
         if (overlay.hitTestList(screenX, screenY, Gdx.graphics.getWidth()) >= 0) return;
-        Point cell = cam.cellUnder(screenX, screenY);
-        Building b = game.getMap().get(cell);
-        if (b == null) {
-            overlay.clear();
-            if (infoUi != null) infoUi.selectBuilding(null);
-            return;
-        }
-        if (b instanceof Factory f) {
-            overlay.toggle(f, game);
-            infoUi.selectBuilding(f);
-        } else if (b instanceof Processor p) {
-            overlay.clear();
-            infoUi.selectBuilding(p);
-        } else if (b instanceof Shop s) {
-            overlay.clear();
-            infoUi.selectBuilding(s);
-        } else if (b instanceof House h) {
-            overlay.clear();
-            infoUi.selectBuilding(h);
-        } else {
-            overlay.clear();
-            infoUi.selectBuilding(null);
+        try (var s = Profiler.start("ui.dblClick")) {
+            Point cell = cam.cellUnder(screenX, screenY);
+            Building b = game.getMap().get(cell);
+            if (b == null) {
+                overlay.clear();
+                if (infoUi != null) infoUi.selectBuilding(null);
+                return;
+            }
+            if (b instanceof Factory f) {
+                overlay.toggle(f, game);
+                infoUi.selectBuilding(f);
+            } else if (b instanceof Processor p) {
+                overlay.clear();
+                infoUi.selectBuilding(p);
+            } else if (b instanceof Shop sh) {
+                overlay.clear();
+                infoUi.selectBuilding(sh);
+            } else if (b instanceof House h) {
+                overlay.clear();
+                infoUi.selectBuilding(h);
+            } else {
+                overlay.clear();
+                infoUi.selectBuilding(null);
+            }
         }
     }
 
@@ -207,6 +224,9 @@ public class UiController extends InputAdapter {
             if (err != null) hud.setStatus("❌ " + err, new Color(1f, 120 / 255f, 120 / 255f, 1f));
             else hud.setStatus("🗺 Карта расширена (+" + game.getLandPurchases() + ")",
                     new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
+            // LAND не входит в режим PLACE — снимаем подсветку, чтобы кнопка
+            // не осталась «выбранной» визуально.
+            if (buildUi != null) buildUi.clearSelection();
             return;
         }
         selectedBlueprint = bp;
@@ -224,6 +244,7 @@ public class UiController extends InputAdapter {
     public void cancelMode() {
         mode = BuildMode.NONE;
         selectedBlueprint = null;
+        if (buildUi != null) buildUi.clearSelection();
         if (hud != null) {
             hud.setStatus("Готов", new Color(200 / 255f, 240 / 255f, 200 / 255f, 1f));
             hud.setHint("ЛКМ — строить, зажать ЛКМ — линия, D — снос, R — поворот");
@@ -233,49 +254,54 @@ public class UiController extends InputAdapter {
     public void enableDemolish() {
         mode = BuildMode.DEMOLISH;
         selectedBlueprint = null;
+        if (buildUi != null) buildUi.clearSelection();
         hud.setStatus("Режим сноса: кликните по зданию", new Color(240 / 255f, 180 / 255f, 120 / 255f, 1f));
         hud.setHint("ЛКМ — снести, зажать ЛКМ — сносить линией, Esc — отмена");
     }
 
     public void toggleDelivery() {
-        if (game.isDeliveryPaused()) {
-            game.resumeAllCars();
-            if (buildUi != null) buildUi.setDeliveryButtonState(false);
-            hud.setStatus("🚚 Доставка возобновлена", new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
-        } else {
-            game.recallAllCars();
-            if (buildUi != null) buildUi.setDeliveryButtonState(true);
-            hud.setStatus("🚚 Все машины на фабриках", new Color(240 / 255f, 200 / 255f, 120 / 255f, 1f));
+        try (var s = Profiler.start("ui.toggleDelivery")) {
+            if (game.isDeliveryPaused()) {
+                game.resumeAllCars();
+                if (buildUi != null) buildUi.setDeliveryButtonState(false);
+                hud.setStatus("🚚 Доставка возобновлена", new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
+            } else {
+                game.recallAllCars();
+                if (buildUi != null) buildUi.setDeliveryButtonState(true);
+                hud.setStatus("🚚 Все машины на фабриках", new Color(240 / 255f, 200 / 255f, 120 / 255f, 1f));
+            }
         }
     }
 
     private void onClick() {
         if (hoverCell == null) return;
-        if (dKeyHeld) {
-            String err = game.trySell(hoverCell);
-            hud.setStatus(err != null ? "❌ " + err : "💥 Снесено",
-                    err != null ? new Color(1f, 120 / 255f, 120 / 255f, 1f)
-                            : new Color(240 / 255f, 200 / 255f, 120 / 255f, 1f));
-            overlay.rebuildMarkers(game);
-            return;
-        }
-        switch (mode) {
-            case PLACE -> {
-                if (selectedBlueprint == null) return;
-                String err = game.tryBuild(selectedBlueprint, hoverCell);
-                hud.setStatus(err != null ? "❌ " + err : "✅ Построено: " + selectedBlueprint.displayName,
-                        err != null ? new Color(1f, 120 / 255f, 120 / 255f, 1f)
-                                : new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
-                overlay.rebuildMarkers(game);
-            }
-            case DEMOLISH -> {
+        try (var s = Profiler.start("ui.onClick")) {
+            if (dKeyHeld) {
                 String err = game.trySell(hoverCell);
                 hud.setStatus(err != null ? "❌ " + err : "💥 Снесено",
                         err != null ? new Color(1f, 120 / 255f, 120 / 255f, 1f)
                                 : new Color(240 / 255f, 200 / 255f, 120 / 255f, 1f));
                 overlay.rebuildMarkers(game);
+                return;
             }
-            default -> { }
+            switch (mode) {
+                case PLACE -> {
+                    if (selectedBlueprint == null) return;
+                    String err = game.tryBuild(selectedBlueprint, hoverCell);
+                    hud.setStatus(err != null ? "❌ " + err : "✅ Построено: " + selectedBlueprint.displayName,
+                            err != null ? new Color(1f, 120 / 255f, 120 / 255f, 1f)
+                                    : new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
+                    overlay.rebuildMarkers(game);
+                }
+                case DEMOLISH -> {
+                    String err = game.trySell(hoverCell);
+                    hud.setStatus(err != null ? "❌ " + err : "💥 Снесено",
+                            err != null ? new Color(1f, 120 / 255f, 120 / 255f, 1f)
+                                    : new Color(240 / 255f, 200 / 255f, 120 / 255f, 1f));
+                    overlay.rebuildMarkers(game);
+                }
+                default -> { }
+            }
         }
     }
 
@@ -305,43 +331,45 @@ public class UiController extends InputAdapter {
     }
 
     private void rotateRoad() {
-        if (mode == BuildMode.PLACE && selectedBlueprint != null
-                && selectedBlueprint.kind == Blueprint.Kind.ROAD
-                && selectedBlueprint.shape != null) {
-            if (selectedBlueprint.shape == RoadShape.CROSS) {
+        try (var s = Profiler.start("ui.rotateRoad")) {
+            if (mode == BuildMode.PLACE && selectedBlueprint != null
+                    && selectedBlueprint.kind == Blueprint.Kind.ROAD
+                    && selectedBlueprint.shape != null) {
+                if (selectedBlueprint.shape == RoadShape.CROSS) {
+                    hud.setStatus("Крест крутить не нужно — он на все стороны",
+                            new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
+                    return;
+                }
+                if (selectedBlueprint.shape.getExits().size() == 1) {
+                    hud.setStatus("Прямую дорогу крутить не нужно",
+                            new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
+                    return;
+                }
+                selectedBlueprint = rotateBlueprint(selectedBlueprint);
+                hud.setStatus("Поворот: " + selectedBlueprint.displayName,
+                        new Color(200 / 255f, 240 / 255f, 200 / 255f, 1f));
+                return;
+            }
+            Point cell = cam.cellUnder(Gdx.input.getX(), Gdx.input.getY());
+            Building b = game.getMap().get(cell);
+            if (!(b instanceof Road r)) {
+                hud.setStatus("Под курсором нет дороги", new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
+                return;
+            }
+            if (r.isStraight()) {
+                hud.setStatus("Прямую дорогу крутить не нужно", new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
+                return;
+            }
+            if (r.isCross()) {
                 hud.setStatus("Крест крутить не нужно — он на все стороны",
                         new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
                 return;
             }
-            if (selectedBlueprint.shape.getExits().size() == 1) {
-                hud.setStatus("Прямую дорогу крутить не нужно",
-                        new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
-                return;
-            }
-            selectedBlueprint = rotateBlueprint(selectedBlueprint);
-            hud.setStatus("Поворот: " + selectedBlueprint.displayName,
-                    new Color(200 / 255f, 240 / 255f, 200 / 255f, 1f));
-            return;
+            String before = r.getTypeName();
+            game.rotateRoadAt(cell);
+            hud.setStatus("Поворот: " + before + " → " + r.getTypeName() + " " + cell,
+                    new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
         }
-        Point cell = cam.cellUnder(Gdx.input.getX(), Gdx.input.getY());
-        Building b = game.getMap().get(cell);
-        if (!(b instanceof Road r)) {
-            hud.setStatus("Под курсором нет дороги", new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
-            return;
-        }
-        if (r.isStraight()) {
-            hud.setStatus("Прямую дорогу крутить не нужно", new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
-            return;
-        }
-        if (r.isCross()) {
-            hud.setStatus("Крест крутить не нужно — он на все стороны",
-                    new Color(200 / 255f, 200 / 255f, 200 / 255f, 1f));
-            return;
-        }
-        String before = r.getTypeName();
-        game.rotateRoadAt(cell);
-        hud.setStatus("Поворот: " + before + " → " + r.getTypeName() + " " + cell,
-                new Color(120 / 255f, 240 / 255f, 120 / 255f, 1f));
     }
 
     private Blueprint rotateBlueprint(Blueprint bp) {
@@ -399,20 +427,22 @@ public class UiController extends InputAdapter {
 
     private boolean handleOverlayClick(int sx, int sy) {
         if (!overlay.isActive()) return false;
-        int idx = overlay.hitTestList(sx, sy, Gdx.graphics.getWidth());
-        if (idx >= 0) {
-            Shop s = overlay.getMarkers().get(idx).shop;
-            if (s == overlay.getSelectedShop()) overlay.deselectShop();
-            else overlay.selectShop(s);
-            return true;
+        try (var s = Profiler.start("ui.overlayClick")) {
+            int idx = overlay.hitTestList(sx, sy, Gdx.graphics.getWidth());
+            if (idx >= 0) {
+                Shop sh = overlay.getMarkers().get(idx).shop;
+                if (sh == overlay.getSelectedShop()) overlay.deselectShop();
+                else overlay.selectShop(sh);
+                return true;
+            }
+            RouteOverlay.ShopMarker m = overlay.hitTest(sx, sy);
+            if (m != null) {
+                if (m.shop == overlay.getSelectedShop()) overlay.deselectShop();
+                else overlay.selectShop(m.shop);
+                return true;
+            }
+            overlay.clear();
+            return false;
         }
-        RouteOverlay.ShopMarker m = overlay.hitTest(sx, sy);
-        if (m != null) {
-            if (m.shop == overlay.getSelectedShop()) overlay.deselectShop();
-            else overlay.selectShop(m.shop);
-            return true;
-        }
-        overlay.clear();
-        return false;
     }
 }

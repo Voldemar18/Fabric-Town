@@ -10,8 +10,6 @@ import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.g2d.freetype.FreeTypeFontGenerator;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.scenes.scene2d.Actor;
-import com.badlogic.gdx.scenes.scene2d.InputEvent;
-import com.badlogic.gdx.scenes.scene2d.InputListener;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.Touchable;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
@@ -24,6 +22,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import ru.student.fabricTown.core.Game;
+import ru.student.fabricTown.profiler.Profiler;
 
 public class UiStage {
     public final Stage stage;
@@ -32,6 +31,7 @@ public class UiStage {
     public final HudRenderer hud;
     private final Skin skin;
     private EmojiSupport emojiSupport;
+    private final UiController controller;
 
     public final BitmapFont fontUi;
     public final BitmapFont fontLabel;
@@ -54,60 +54,76 @@ public class UiStage {
                     + "\u25B6\u25BC";
 
     public UiStage(Game game, UiController ctrl) {
-        stage = new Stage(new ScreenViewport());
-        skin = createBasicSkin();
-        fontUi = skin.getFont("default-font");
-        fontLabel = skin.getFont("label-font");
-        fontSmall = skin.getFont("small-font");
-        fontTiny = skin.getFont("tiny-font");
-        fontBig = skin.getFont("big-font");
+        this.controller = ctrl;
+        try (var s = Profiler.start("ui.ctor")) {
+            stage = new Stage(new ScreenViewport());
+            skin = createBasicSkin();
+            fontUi = skin.getFont("default-font");
+            fontLabel = skin.getFont("label-font");
+            fontSmall = skin.getFont("small-font");
+            fontTiny = skin.getFont("tiny-font");
+            fontBig = skin.getFont("big-font");
 
-        hud = new HudRenderer(this);
-        buildUi = new BuildUi(skin, ctrl, this);
-        infoUi = new InfoUi(skin, game, this, msg ->
-                hud.setStatus(msg, new Color(1f, 120 / 255f, 120 / 255f, 1f)));
+            hud = new HudRenderer(this);
+            buildUi = new BuildUi(skin, ctrl, this);
+            infoUi = new InfoUi(skin, game, this, msg ->
+                    hud.setStatus(msg, new Color(1f, 120 / 255f, 120 / 255f, 1f)));
 
-        Table root = new Table();
-        root.setFillParent(true);
-        root.setTouchable(Touchable.childrenOnly);
-        root.add(hud.bar).colspan(3).growX().height(HUD_H).row();
+            Table root = new Table();
+            root.setFillParent(true);
+            root.setTouchable(Touchable.childrenOnly);
+            root.add(hud.bar).colspan(3).growX().height(HUD_H).row();
 
-        root.add(buildUi.root).width(LEFT_PANEL_W).growY();
-        Actor spacer = new Actor();
-        spacer.setTouchable(Touchable.disabled);
-        root.add(spacer).grow();
-        root.add(infoUi.root).width(RIGHT_PANEL_W).growY();
-        stage.addActor(root);
+            root.add(buildUi.root).width(LEFT_PANEL_W).growY();
+            Actor spacer = new Actor();
+            spacer.setTouchable(Touchable.disabled);
+            root.add(spacer).grow();
+            root.add(infoUi.root).width(RIGHT_PANEL_W).growY();
+            stage.addActor(root);
 
-        // Единый обработчик скролла.
-        // Логика:
-        //   - курсор над ScrollPane левой панели   -> скроллим этот ScrollPane
-        //   - курсор над ScrollPane правой панели  -> скроллим этот ScrollPane
-        //   - курсор над остальной областью карты  -> зум камеры
-        //   - курсор над HUD                       -> ничего
-        // Всегда возвращаем true, чтобы событие не "протекло" в чужие ScrollPane.
-        stage.getRoot().addCaptureListener(new InputListener() {
-            @Override
-            public boolean scrolled(InputEvent event, float x, float y,
-                                    float amountX, float amountY) {
-                if (y < HUD_H) return true;
-
-                if (overPane(buildUi.getScrollPane(), x, y)) {
-                    scrollPane(buildUi.getScrollPane(), amountY);
-                    return true;
-                }
-                if (overPane(infoUi.getScrollPane(), x, y)) {
-                    scrollPane(infoUi.getScrollPane(), amountY);
-                    return true;
-                }
-                // Всё остальное — карта.
-                ctrl.onScrolled(amountY);
-                return true;
-            }
-        });
+            // ВАЖНО: capture-listener убран. Скролл перехватывается в InputAdapter
+            // в FabricTownApp ДО Stage — иначе scrollFocus внутри Stage съедает событие.
+        }
     }
 
-    /** Проверяет, попадает ли точка Stage (x, y сверху вниз) в границы ScrollPane. */
+    /**
+     * Единая точка обработки колеса мыши.
+     * Вызывается из InputAdapter в FabricTownApp ПЕРЕД Stage.
+     * Возвращает true, если событие поглощено (тогда Stage его не увидит).
+     */
+    public boolean handleScroll(float amountY) {
+        try (var s = Profiler.start("ui.scroll")) {
+            Vector2 mouse = stage.screenToStageCoordinates(
+                    new Vector2(Gdx.input.getX(), Gdx.input.getY()));
+            float x = mouse.x;
+            float y = mouse.y;
+
+            // HUD — не зумим и не скроллим.
+            if (y < HUD_H) return true;
+
+            // Левая панель: список чертежей.
+            if (overPane(buildUi.getScrollPane(), x, y)) {
+                scrollPane(buildUi.getScrollPane(), amountY);
+                return true;
+            }
+
+            // Правая панель: список объектов.
+            if (overPane(infoUi.getScrollPane(), x, y)) {
+                scrollPane(infoUi.getScrollPane(), amountY);
+                return true;
+            }
+
+            // Правая панель: список связей.
+            if (overPane(infoUi.getBindingsScrollPane(), x, y)) {
+                scrollPane(infoUi.getBindingsScrollPane(), amountY);
+                return true;
+            }
+
+            // Карта: зум.
+            return controller.onScrolled(amountY);
+        }
+    }
+
     private boolean overPane(ScrollPane pane, float stageX, float stageY) {
         if (pane == null || !pane.isVisible()) return false;
         Vector2 local = pane.stageToLocalCoordinates(new Vector2(stageX, stageY));
@@ -115,7 +131,6 @@ public class UiStage {
                 && local.x <= pane.getWidth() && local.y <= pane.getHeight();
     }
 
-    /** Прокручивает ScrollPane на amountY, соблюдая лимиты. */
     private void scrollPane(ScrollPane pane, float amountY) {
         if (pane == null) return;
         float max = Math.max(0f, pane.getMaxY());
@@ -126,9 +141,9 @@ public class UiStage {
     }
 
     public void render(float delta) {
-        infoUi.act(delta);
-        stage.act(delta);
-        stage.draw();
+        try (var s = Profiler.start("ui.infoUi.act")) { infoUi.act(delta); }
+        try (var s = Profiler.start("ui.stage.act"))  { stage.act(delta); }
+        try (var s = Profiler.start("ui.stage.draw")) { stage.draw(); }
     }
 
     public void resize(int w, int h) {

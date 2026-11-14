@@ -2,6 +2,7 @@ package ru.student.fabricTown.lwjgl3;
 
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.InputMultiplexer;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
@@ -29,7 +30,7 @@ public class FabricTownApp extends ApplicationAdapter {
     private UiController ui;
     private UiStage uiStage;
     private ProfilerSnapshot lastProfilerSnap;
-    private int profilerFrameCounter;
+    private float profilerSnapAcc = 0f;
     private float lastDt = 1f / 60f;
 
     @Override
@@ -51,8 +52,18 @@ public class FabricTownApp extends ApplicationAdapter {
         ui.setInfoUi(uiStage.infoUi);
         ui.setBuildUi(uiStage.buildUi);
         ui.setHud(uiStage.hud);
+        ui.setUiStage(uiStage);
 
         InputMultiplexer mp = new InputMultiplexer();
+        // ВАЖНО: этот процессор ставится ПЕРВЫМ и перехватывает скролл ДО Stage.
+        // Иначе scrollFocus внутри Stage будет перехватывать колесо и крутить
+        // панель даже когда курсор над картой.
+        mp.addProcessor(new InputAdapter() {
+            @Override
+            public boolean scrolled(float amountX, float amountY) {
+                return uiStage.handleScroll(amountY);
+            }
+        });
         mp.addProcessor(uiStage.stage);
         mp.addProcessor(ui);
         Gdx.input.setInputProcessor(mp);
@@ -67,50 +78,68 @@ public class FabricTownApp extends ApplicationAdapter {
         lastDt = dt;
 
         try (var s = Profiler.start("render.total")) {
-            game.tick(dt);
-            NotificationRenderer.tickAnimations(game.getNotifications(), dt);
-            cam.update(dt);
-            ui.update();
-            uiStage.hud.refresh(game);
+            try (var s2 = Profiler.start("game.tick"))     { game.tick(dt); }
+            try (var s2 = Profiler.start("notifications")) { NotificationRenderer.tickAnimations(game.getNotifications(), dt); }
+            try (var s2 = Profiler.start("cam.update"))    { cam.update(dt); }
+            try (var s2 = Profiler.start("ui.update"))     { ui.update(); }
+            try (var s2 = Profiler.start("hud.refresh"))   { uiStage.hud.refresh(game); }
 
-            Gdx.gl.glClearColor(25 / 255f, 25 / 255f, 30 / 255f, 1f);
-            Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+            try (var s2 = Profiler.start("render.clear")) {
+                Gdx.gl.glClearColor(25 / 255f, 25 / 255f, 30 / 255f, 1f);
+                Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+            }
 
             try (var s2 = Profiler.start("render.world")) {
                 renderer.renderWorld(game, cam, ui.mode, ui.selectedBlueprint,
                         ui.hoverCell, ui.hoverValid, ui.hoverBuilding);
             }
 
-            ShapeRenderer shapes = renderer.getShapes();
-            shapes.setProjectionMatrix(cam.camera.combined);
-            Gdx.gl.glEnable(GL20.GL_BLEND);
-            Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-            shapes.begin(ShapeRenderer.ShapeType.Filled);
-            overlay.drawFilled(shapes, game);
-            shapes.end();
-            shapes.begin(ShapeRenderer.ShapeType.Line);
-            overlay.drawLines(shapes, game, cam);
-            shapes.end();
-            Gdx.gl.glDisable(GL20.GL_BLEND);
+            try (var s2 = Profiler.start("render.overlay")) {
+                ShapeRenderer shapes = renderer.getShapes();
+                shapes.setProjectionMatrix(cam.camera.combined);
+                Gdx.gl.glEnable(GL20.GL_BLEND);
+                Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+                shapes.begin(ShapeRenderer.ShapeType.Filled);
+                overlay.drawFilled(shapes, game);
+                shapes.end();
+                shapes.begin(ShapeRenderer.ShapeType.Line);
+                overlay.drawLines(shapes, game, cam);
+                shapes.end();
+                Gdx.gl.glDisable(GL20.GL_BLEND);
+            }
 
             batch.getProjectionMatrix().setToOrtho2D(0, 0,
                     Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
             batch.begin();
-            renderer.renderScreenLabels(batch, uiStage.fontTiny, uiStage.fontLabel, uiStage.fontBig,
-                    game, cam, ui.mode, ui.selectedBlueprint, ui.hoverCell, ui.hoverBuilding);
-            overlay.drawScreen(batch, pixel, uiStage.fontLabel, uiStage.fontSmall, game, cam);
-            overlay.drawNoRouteIfNeeded(batch, pixel, uiStage.fontLabel, game, cam);
-            renderer.drawHelp(batch, uiStage.fontSmall, uiStage.fontLabel, ui.hoverCell, pixel);
-            NotificationRenderer.draw(batch, pixel, uiStage.fontLabel, game.getNotifications(), uiStage);
-            if (Profiler.isEnabled() && ui.profilerOverlayVisible && lastProfilerSnap != null) {
-                if (++profilerFrameCounter % 10 == 0) lastProfilerSnap = Profiler.snapshot();
-                ProfilerHud.draw(batch, pixel, uiStage.fontTiny, lastProfilerSnap,
-                        lastDt > 0 ? 1.0 / lastDt : 0);
+            try (var s2 = Profiler.start("render.labels")) {
+                renderer.renderScreenLabels(batch, uiStage.fontTiny, uiStage.fontLabel, uiStage.fontBig,
+                        game, cam, ui.mode, ui.selectedBlueprint, ui.hoverCell, ui.hoverBuilding);
+            }
+            try (var s2 = Profiler.start("render.overlayScreen")) {
+                overlay.drawScreen(batch, pixel, uiStage.fontLabel, uiStage.fontSmall, game, cam);
+                overlay.drawNoRouteIfNeeded(batch, pixel, uiStage.fontLabel, game, cam);
+            }
+            try (var s2 = Profiler.start("render.help")) {
+                renderer.drawHelp(batch, uiStage.fontSmall, uiStage.fontLabel, ui.hoverCell, pixel);
+            }
+            try (var s2 = Profiler.start("render.notifications")) {
+                NotificationRenderer.draw(batch, pixel, uiStage.fontLabel, game.getNotifications(), uiStage);
+            }
+            if (Profiler.isEnabled() && lastProfilerSnap != null) {
+                profilerSnapAcc += dt;
+                if (profilerSnapAcc >= 0.5f) {
+                    profilerSnapAcc = 0;
+                    lastProfilerSnap = Profiler.snapshot();
+                }
+                if (ui.profilerOverlayVisible) {
+                    ProfilerHud.draw(batch, pixel, uiStage.fontTiny, lastProfilerSnap,
+                            lastDt > 0 ? 1.0 / lastDt : 0);
+                }
             }
             batch.end();
         }
 
-        uiStage.render(dt);
+        try (var s = Profiler.start("uiStage.render")) { uiStage.render(dt); }
     }
 
     @Override
