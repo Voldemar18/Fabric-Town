@@ -45,6 +45,9 @@ public class UiController extends InputAdapter {
 
     public boolean profilerOverlayVisible = false;
 
+    private StatsUi statsUi;
+    public void setStatsUi(StatsUi s) { statsUi = s; }
+
     public UiController(Game game, CameraController cam, RouteOverlay overlay) {
         this.game = game;
         this.cam = cam;
@@ -142,6 +145,10 @@ public class UiController extends InputAdapter {
             }
             case Input.Keys.R -> {
                 rotateRoad();
+                return true;
+            }
+            case Input.Keys.F1 -> {
+                if (statsUi != null) statsUi.toggle();
                 return true;
             }
             case Input.Keys.F3 -> {

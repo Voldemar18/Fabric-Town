@@ -29,6 +29,7 @@ public class UiStage {
     public final BuildUi buildUi;
     public final InfoUi infoUi;
     public final HudRenderer hud;
+    public final StatsUi statsUi;
     private final Skin skin;
     private EmojiSupport emojiSupport;
     private final UiController controller;
@@ -51,7 +52,7 @@ public class UiStage {
                     + "\u20BF"
                     + "\u00AB\u00BB"
                     + "\u2022"
-                    + "\u25B6\u25BC";
+                    + "\u25BC";
 
     public UiStage(Game game, UiController ctrl) {
         this.controller = ctrl;
@@ -68,6 +69,7 @@ public class UiStage {
             buildUi = new BuildUi(skin, ctrl, this);
             infoUi = new InfoUi(skin, game, this, msg ->
                     hud.setStatus(msg, new Color(1f, 120 / 255f, 120 / 255f, 1f)));
+            statsUi = new StatsUi(skin, game, this);
 
             Table root = new Table();
             root.setFillParent(true);
@@ -80,6 +82,20 @@ public class UiStage {
             root.add(spacer).grow();
             root.add(infoUi.root).width(RIGHT_PANEL_W).growY();
             stage.addActor(root);
+
+            // ==== Статистика: сверху по центру, поверх сцены ====
+            // Обёртка растянута на весь экран через setFillParent — Table сам
+            // центрирует содержимое по горизонтали (top() прижимает к верху).
+            // Touchable.childrenOnly: обёртка не перехватывает клики, но
+            // ScrollPane внутри панели получает их как обычно.
+            Table statsWrap = new Table();
+            statsWrap.setFillParent(true);
+            statsWrap.setTouchable(Touchable.childrenOnly);
+            statsWrap.top().padTop(HUD_H + 8f);
+            statsWrap.add(statsUi.root).top().center();
+            stage.addActor(statsWrap);
+
+            ctrl.setStatsUi(statsUi);
 
             // ВАЖНО: capture-listener убран. Скролл перехватывается в InputAdapter
             // в FabricTownApp ДО Stage — иначе scrollFocus внутри Stage съедает событие.
@@ -119,6 +135,12 @@ public class UiStage {
                 return true;
             }
 
+            // Панель статистики — только когда она видима.
+            if (statsUi.isVisible() && overPane(statsUi.getScrollPane(), x, y)) {
+                scrollPane(statsUi.getScrollPane(), amountY);
+                return true;
+            }
+
             // Карта: зум.
             return controller.onScrolled(amountY);
         }
@@ -141,13 +163,15 @@ public class UiStage {
     }
 
     public void render(float delta) {
-        try (var s = Profiler.start("ui.infoUi.act")) { infoUi.act(delta); }
-        try (var s = Profiler.start("ui.stage.act"))  { stage.act(delta); }
-        try (var s = Profiler.start("ui.stage.draw")) { stage.draw(); }
+        try (var s = Profiler.start("ui.infoUi.act"))  { infoUi.act(delta); }
+        try (var s = Profiler.start("ui.statsUi.act")) { statsUi.act(delta); }
+        try (var s = Profiler.start("ui.stage.act"))   { stage.act(delta); }
+        try (var s = Profiler.start("ui.stage.draw"))  { stage.draw(); }
     }
 
     public void resize(int w, int h) {
         stage.getViewport().update(w, h, true);
+        // Никакого ручного setPosition — statsWrap растянут через setFillParent.
     }
 
     public Skin getSkin() { return skin; }
